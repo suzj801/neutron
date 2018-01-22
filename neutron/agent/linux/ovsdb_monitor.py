@@ -95,6 +95,7 @@ class SimpleInterfaceMonitor(OvsdbMonitor):
         devices_added = []
         devices_removed = []
         dev_to_ofport = {}
+        dev_to_external_ids = {}
         for row in self.iter_stdout():
             json = jsonutils.loads(row).get('data')
             for ovs_id, action, name, ofport, external_ids in json:
@@ -111,12 +112,14 @@ class SimpleInterfaceMonitor(OvsdbMonitor):
                     devices_removed.append(device)
                 elif action == OVSDB_ACTION_NEW:
                     dev_to_ofport[name] = ofport
+                    dev_to_external_ids[name] = external_ids
 
         self.new_events['added'].extend(devices_added)
         self.new_events['removed'].extend(devices_removed)
         # update any events with ofports received from 'new' action
         for event in self.new_events['added']:
             event['ofport'] = dev_to_ofport.get(event['name'], event['ofport'])
+            event['external_ids'] = dev_to_external_ids.get(event['name'], event['external_ids'])
 
     def start(self, block=False, timeout=5):
         super(SimpleInterfaceMonitor, self).start()
