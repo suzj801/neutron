@@ -56,7 +56,11 @@ class SecurityGroupDbMixin(ext_sg.SecurityGroupPluginBase):
         # from being processed. This is a hook point for backend's validation;
         # we raise to propagate the reason for the failure.
         try:
-            registry.notify(res, event, self, **kwargs)
+            if 'payload' in kwargs:
+                # TODO(boden): remove shim once all callbacks use payloads
+                registry.publish(res, event, self, payload=kwargs['payload'])
+            else:
+                registry.notify(res, event, self, **kwargs)
         except exceptions.CallbackFailure as e:
             if exc_cls:
                 reason = (_('cannot perform %(event)s due to %(reason)s') %
@@ -261,8 +265,11 @@ class SecurityGroupDbMixin(ext_sg.SecurityGroupPluginBase):
             self._registry_notify(
                     resources.SECURITY_GROUP,
                     events.PRECOMMIT_UPDATE,
-                    exc_cls=ext_sg.SecurityGroupConflict, **kwargs)
-
+                    exc_cls=ext_sg.SecurityGroupConflict,
+                    payload=events.DBEventPayload(
+                        context, request_body=s,
+                        states=(kwargs['original_security_group'],),
+                        resource_id=id, desired_state=sg_dict))
         registry.notify(resources.SECURITY_GROUP, events.AFTER_UPDATE, self,
                         **kwargs)
         return sg_dict
@@ -469,6 +476,14 @@ class SecurityGroupDbMixin(ext_sg.SecurityGroupPluginBase):
                     rule['port_range_max'] is not None):
                 raise ext_sg.SecurityGroupMissingIcmpType(
                     value=rule['port_range_max'])
+        else:
+            # Only the protocols above support port ranges, raise otherwise.
+            # When min/max are the same it is just a single port.
+            if (rule['port_range_min'] is not None and
+                rule['port_range_max'] is not None and
+                rule['port_range_min'] != rule['port_range_max']):
+                raise ext_sg.SecurityGroupInvalidProtocolForPortRange(
+                    protocol=ip_proto)
 
     def _validate_ethertype_and_protocol(self, rule):
         """Check if given ethertype and  protocol are valid or not"""
@@ -812,8 +827,9 @@ class SecurityGroupDbMixin(ext_sg.SecurityGroupPluginBase):
         is either [] or not is_attr_set, otherwise return False
         """
         if (ext_sg.SECURITYGROUPS in port['port'] and
-            not (validators.is_attr_set(port['port'][ext_sg.SECURITYGROUPS])
-                 and port['port'][ext_sg.SECURITYGROUPS] != [])):
+            not (validators.is_attr_set(
+                     port['port'][ext_sg.SECURITYGROUPS]) and
+                 port['port'][ext_sg.SECURITYGROUPS] != [])):
             return True
         return False
 

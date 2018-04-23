@@ -22,7 +22,6 @@ from oslo_config import cfg
 from oslo_log import log as logging
 import testscenarios
 
-from neutron.agent import firewall
 from neutron.objects.logapi import logging_resource as log_object
 from neutron.plugins.ml2.drivers.openvswitch.agent import (
     ovs_agent_extension_api as ovs_ext_api)
@@ -63,12 +62,13 @@ class LoggingExtensionTestFramework(test_firewall.BaseFirewallTestCase):
         self.log_driver = self.initialize_ovs_fw_log()
 
     def initialize_ovs_fw_log(self):
-        int_br = ovs_ext_api.OVSCookieBridge(ovs_bridge.OVSAgentBridge(
-            self.tester.bridge.br_name))
         mock.patch('ryu.base.app_manager.AppManager.get_instance').start()
         mock.patch(
             'neutron.agent.ovsdb.impl_vsctl.OvsdbVsctl.transaction').start()
-        log_driver = ovs_fw_log.OVSFirewallLoggingDriver(int_br)
+        agent_api = ovs_ext_api.OVSAgentExtensionAPI(
+            ovs_bridge.OVSAgentBridge(self.tester.bridge.br_name),
+            ovs_bridge.OVSAgentBridge('br-tun'))
+        log_driver = ovs_fw_log.OVSFirewallLoggingDriver(agent_api)
         log_driver.initialize(self.resource_rpc)
         return log_driver
 
@@ -128,18 +128,18 @@ class TestLoggingExtension(LoggingExtensionTestFramework):
 
     def test_log_lifecycle(self):
         sg_rules = [{'ethertype': constants.IPv4,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_ICMP,
                      'security_group_id': self.FAKE_SECURITY_GROUP_ID},
                     {'ethertype': constants.IPv4,
-                     'direction': firewall.EGRESS_DIRECTION,
+                     'direction': constants.EGRESS_DIRECTION,
                      'security_group_id': self.FAKE_SECURITY_GROUP_ID},
                     {'ethertype': constants.IPv6,
                      'protocol': constants.PROTO_NAME_TCP,
                      'port_range_min': 22,
                      'port_range_max': 22,
                      'remote_group_id': 2,
-                     'direction': firewall.EGRESS_DIRECTION,
+                     'direction': constants.EGRESS_DIRECTION,
                      'security_group_id': self.FAKE_SECURITY_GROUP_ID},
                     ]
         self.firewall.update_security_group_rules(

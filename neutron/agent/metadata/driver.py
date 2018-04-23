@@ -39,6 +39,7 @@ PROXY_CONFIG_DIR = "ns-metadata-proxy"
 _HAPROXY_CONFIG_TEMPLATE = """
 global
     log         /dev/log local0 %(log_level)s
+    log-tag     %(log_tag)s
     user        %(user)s
     group       %(group)s
     maxconn     1024
@@ -86,6 +87,12 @@ class HaproxyConfigurator(object):
         self.pidfile = pid_file
         self.log_level = (
             'debug' if logging.is_debug_enabled(cfg.CONF) else 'info')
+        # log-tag will cause entries to have the string pre-pended, so use
+        # the uuid haproxy will be started with.  Additionally, if it
+        # starts with "haproxy" then things will get logged to
+        # /var/log/haproxy.log on Debian distros, instead of to syslog.
+        uuid = network_id or router_id
+        self.log_tag = "haproxy-" + METADATA_SERVICE_NAME + "-" + uuid
 
     def create_config_file(self):
         """Create the config file for haproxy."""
@@ -114,7 +121,8 @@ class HaproxyConfigurator(object):
             'user': username,
             'group': groupname,
             'pidfile': self.pidfile,
-            'log_level': self.log_level
+            'log_level': self.log_level,
+            'log_tag': self.log_tag
         }
         if self.network_id:
             cfg_info['res_type'] = 'Network'
@@ -175,16 +183,6 @@ class MetadataDriver(object):
                  (mark, constants.ROUTER_MARK_MASK)),
                 ('INPUT', '-p tcp -m tcp --dport %s '
                  '-j DROP' % port)]
-
-    @classmethod
-    def metadata_mangle_rules(cls, mark):
-        return [('PREROUTING', '-d 169.254.169.254/32 '
-                 '-i %(interface_name)s '
-                 '-p tcp -m tcp --dport 80 '
-                 '-j MARK --set-xmark %(value)s/%(mask)s' %
-                 {'interface_name': namespaces.INTERNAL_DEV_PREFIX + '+',
-                  'value': mark,
-                  'mask': constants.ROUTER_MARK_MASK})]
 
     @classmethod
     def metadata_nat_rules(cls, port):
@@ -294,8 +292,6 @@ def after_router_added(resource, event, l3_agent, **kwargs):
     for c, r in proxy.metadata_filter_rules(proxy.metadata_port,
                                            proxy.metadata_access_mark):
         router.iptables_manager.ipv4['filter'].add_rule(c, r)
-    for c, r in proxy.metadata_mangle_rules(proxy.metadata_access_mark):
-        router.iptables_manager.ipv4['mangle'].add_rule(c, r)
     for c, r in proxy.metadata_nat_rules(proxy.metadata_port):
         router.iptables_manager.ipv4['nat'].add_rule(c, r)
     for c, r in proxy.metadata_checksum_rules(proxy.metadata_port):

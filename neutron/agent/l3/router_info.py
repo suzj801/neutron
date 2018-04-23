@@ -52,6 +52,7 @@ class RouterInfo(object):
                  use_ipv6=False):
         self.agent = agent
         self.router_id = router_id
+        self.agent_conf = agent_conf
         self.ex_gw_port = None
         self._snat_enabled = None
         self.fip_map = {}
@@ -73,8 +74,8 @@ class RouterInfo(object):
             use_ipv6=use_ipv6,
             namespace=self.ns_name)
         self.initialize_address_scope_iptables()
+        self.initialize_metadata_iptables()
         self.routes = []
-        self.agent_conf = agent_conf
         self.driver = interface_driver
         self.process_monitor = None
         # radvd is a neutron.agent.linux.ra.DaemonMonitor
@@ -771,8 +772,8 @@ class RouterInfo(object):
     def _delete_stale_external_devices(self, interface_name):
         existing_devices = self._get_existing_devices()
         stale_devs = [dev for dev in existing_devices
-                      if dev.startswith(EXTERNAL_DEV_PREFIX)
-                      and dev != interface_name]
+                      if dev.startswith(EXTERNAL_DEV_PREFIX) and
+                      dev != interface_name]
         for stale_dev in stale_devs:
             LOG.debug('Deleting stale external router device: %s', stale_dev)
             self.agent.pd.remove_gw_interface(self.router['id'])
@@ -992,6 +993,21 @@ class RouterInfo(object):
         iptables_manager.ipv6['mangle'].add_rule(
             'PREROUTING', copy_address_scope_for_existing)
 
+    def initialize_metadata_iptables(self):
+        # Always mark incoming metadata requests, that way any stray
+        # requests that arrive before the filter metadata redirect
+        # rule is installed will be dropped.
+        mark_metadata_for_internal_interfaces = (
+            '-d 169.254.169.254/32 '
+            '-i %(interface_name)s '
+            '-p tcp -m tcp --dport 80 '
+            '-j MARK --set-xmark %(value)s/%(mask)s' %
+            {'interface_name': INTERNAL_DEV_PREFIX + '+',
+             'value': self.agent_conf.metadata_access_mark,
+             'mask': n_const.ROUTER_MARK_MASK})
+        self.iptables_manager.ipv4['mangle'].add_rule(
+            'PREROUTING', mark_metadata_for_internal_interfaces)
+
     def _get_port_devicename_scopemark(self, ports, name_generator):
         devicename_scopemark = {lib_constants.IP_VERSION_4: dict(),
                                 lib_constants.IP_VERSION_6: dict()}
@@ -1037,8 +1053,8 @@ class RouterInfo(object):
             iptables = iptables_manager.get_tables(ip_version)
             iptables['mangle'].empty_chain('scope')
             iptables['filter'].empty_chain('scope')
-            dont_block_external = (ip_version == lib_constants.IP_VERSION_4
-                                   and self._snat_enabled and external_port)
+            dont_block_external = (ip_version == lib_constants.IP_VERSION_4 and
+                                   self._snat_enabled and external_port)
             for device_name, mark in scopemarks.items():
                 # Add address scope iptables rule
                 iptables['mangle'].add_rule(

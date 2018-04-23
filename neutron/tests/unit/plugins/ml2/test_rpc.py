@@ -20,6 +20,7 @@ Unit Tests for ml2 rpc
 import collections
 
 import mock
+from neutron_lib.agent import topics
 from neutron_lib.callbacks import resources
 from neutron_lib import constants
 from neutron_lib.plugins import constants as plugin_constants
@@ -30,7 +31,6 @@ from oslo_context import context as oslo_context
 from sqlalchemy.orm import exc
 
 from neutron.agent import rpc as agent_rpc
-from neutron.common import topics
 from neutron.db import provisioning_blocks
 from neutron.plugins.ml2 import db as ml2_db
 from neutron.plugins.ml2.drivers import type_tunnel
@@ -317,7 +317,7 @@ class RpcCallbacksTestCase(base.BaseTestCase):
 class RpcApiTestCase(base.BaseTestCase):
 
     def _test_rpc_api(self, rpcapi, topic, method, rpc_method, **kwargs):
-        ctxt = oslo_context.RequestContext(user='fake_user',
+        ctxt = oslo_context.RequestContext(user_id='fake_user',
                                            tenant='fake_project')
         expected_retval = 'foo' if rpc_method == 'call' else None
         expected_version = kwargs.pop('version', None)

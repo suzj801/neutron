@@ -14,6 +14,7 @@
 #    under the License.
 
 from neutron_lib.api.definitions import portbindings
+from neutron_lib.api import extensions
 from neutron_lib.callbacks import events
 from neutron_lib.callbacks import registry
 from neutron_lib.callbacks import resources
@@ -23,7 +24,6 @@ from neutron_lib.plugins import directory
 from oslo_log import log as logging
 from sqlalchemy import or_
 
-from neutron.common import constants as l3_consts
 from neutron.common import utils as n_utils
 
 from neutron.db import agentschedulers_db
@@ -227,7 +227,8 @@ class L3_DVRsch_db_mixin(l3agent_sch_db.L3AgentSchedulerDbMixin):
 
     def _get_active_l3_agent_routers_sync_data(self, context, host, agent,
                                                router_ids):
-        if n_utils.is_extension_supported(self, n_const.L3_HA_MODE_EXT_ALIAS):
+        if extensions.is_extension_supported(
+                self, n_const.L3_HA_MODE_EXT_ALIAS):
             return self.get_ha_sync_data_for_host(context, host, agent,
                                                   router_ids=router_ids,
                                                   active=True)
@@ -320,7 +321,7 @@ class L3_DVRsch_db_mixin(l3agent_sch_db.L3AgentSchedulerDbMixin):
         # dvr serviceable ports, so need special handling
         if (self._get_agent_mode(agent_db) in
             [n_const.L3_AGENT_MODE_DVR,
-             l3_consts.L3_AGENT_MODE_DVR_NO_EXTERNAL,
+             n_const.L3_AGENT_MODE_DVR_NO_EXTERNAL,
              n_const.L3_AGENT_MODE_DVR_SNAT]):
             if not router_ids:
                 result_set |= set(self._get_dvr_router_ids_for_host(

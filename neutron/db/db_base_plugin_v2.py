@@ -168,9 +168,9 @@ class NeutronDbPluginV2(db_base_plugin_common.DbBasePluginCommon,
             db_api.sqla_listen(models_v2.Port.status, 'set',
                                self.nova_notifier.record_port_status_changed)
 
-    @registry.receives(rbac_mixin.RBAC_POLICY, [events.BEFORE_CREATE,
-                                                events.BEFORE_UPDATE,
-                                                events.BEFORE_DELETE])
+    @registry.receives(resources.RBAC_POLICY, [events.BEFORE_CREATE,
+                                               events.BEFORE_UPDATE,
+                                               events.BEFORE_DELETE])
     @db_api.retry_if_session_inactive()
     def validate_network_rbac_policy_change(self, resource, event, trigger,
                                             context, object_type, policy,
@@ -278,8 +278,23 @@ class NeutronDbPluginV2(db_base_plugin_common.DbBasePluginCommon,
         # raise if multiple tenants found or if the only tenant found
         # is not the owner of the network
         if (len(tenant_ids) > 1 or len(tenant_ids) == 1 and
-            tenant_ids.pop() != original.tenant_id):
-            raise n_exc.InvalidSharedSetting(network=original.name)
+            original.tenant_id not in tenant_ids):
+            self._validate_projects_have_access_to_network(
+                original, tenant_ids)
+
+    def _validate_projects_have_access_to_network(self, network, project_ids):
+        ctx_admin = ctx.get_admin_context()
+        rb_model = rbac_db.NetworkRBAC
+        other_rbac_entries = model_query.query_with_hooks(
+            ctx_admin, rb_model).filter(
+                and_(rb_model.object_id == network.id,
+                     rb_model.action == 'access_as_shared',
+                     rb_model.target_tenant != "*"))
+        allowed_projects = {entry['target_tenant']
+                            for entry in other_rbac_entries}
+        allowed_projects.add(network.project_id)
+        if project_ids - allowed_projects:
+            raise n_exc.InvalidSharedSetting(network=network.name)
 
     def _validate_ipv6_attributes(self, subnet, cur_subnet):
         if cur_subnet:

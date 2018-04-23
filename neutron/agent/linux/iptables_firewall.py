@@ -34,11 +34,11 @@ from neutron.common import utils as c_utils
 LOG = logging.getLogger(__name__)
 SG_CHAIN = 'sg-chain'
 SPOOF_FILTER = 'spoof-filter'
-CHAIN_NAME_PREFIX = {firewall.INGRESS_DIRECTION: 'i',
-                     firewall.EGRESS_DIRECTION: 'o',
+CHAIN_NAME_PREFIX = {constants.INGRESS_DIRECTION: 'i',
+                     constants.EGRESS_DIRECTION: 'o',
                      SPOOF_FILTER: 's'}
-IPSET_DIRECTION = {firewall.INGRESS_DIRECTION: 'src',
-                   firewall.EGRESS_DIRECTION: 'dst'}
+IPSET_DIRECTION = {constants.INGRESS_DIRECTION: 'src',
+                   constants.EGRESS_DIRECTION: 'dst'}
 comment_rule = iptables_manager.comment_rule
 
 
@@ -53,8 +53,8 @@ class mac_iptables(netaddr.mac_eui48):
 
 class IptablesFirewallDriver(firewall.FirewallDriver):
     """Driver which enforces security groups through iptables rules."""
-    IPTABLES_DIRECTION = {firewall.INGRESS_DIRECTION: 'physdev-out',
-                          firewall.EGRESS_DIRECTION: 'physdev-in'}
+    IPTABLES_DIRECTION = {constants.INGRESS_DIRECTION: 'physdev-out',
+                          constants.EGRESS_DIRECTION: 'physdev-in'}
     CONNTRACK_ZONE_PER_PORT = False
 
     def __init__(self, namespace=None):
@@ -67,6 +67,7 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
         # list of port which has security group
         self.filtered_ports = {}
         self.unfiltered_ports = {}
+        self.trusted_ports = []
         self.ipconntrack = ip_conntrack.get_conntrack(
             self.iptables.get_rules_for_table, self.filtered_ports,
             self.unfiltered_ports, namespace=namespace,
@@ -107,6 +108,37 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
                 self.updated_sg_members.update(device_ids)
             else:
                 self._update_remote_security_group_members(sec_group_ids)
+
+    def process_trusted_ports(self, port_ids):
+        """Process ports that are trusted and shouldn't be filtered."""
+        for port in port_ids:
+            if port not in self.trusted_ports:
+                self._add_trusted_port_rules(port)
+                self.trusted_ports.append(port)
+
+    def remove_trusted_ports(self, port_ids):
+        for port in port_ids:
+            if port in self.trusted_ports:
+                self._remove_trusted_port_rules(port)
+                self.trusted_ports.remove(port)
+
+    def _add_trusted_port_rules(self, port):
+        device = self._get_device_name(port)
+        jump_rule = [
+            '-m physdev --%s %s --physdev-is-bridged -j ACCEPT' % (
+                self.IPTABLES_DIRECTION[constants.INGRESS_DIRECTION],
+                device)]
+        self._add_rules_to_chain_v4v6(
+            'FORWARD', jump_rule, jump_rule, comment=ic.TRUSTED_ACCEPT)
+
+    def _remove_trusted_port_rules(self, port):
+        device = self._get_device_name(port)
+
+        jump_rule = [
+            '-m physdev --%s %s --physdev-is-bridged -j ACCEPT' % (
+                self.IPTABLES_DIRECTION[constants.INGRESS_DIRECTION],
+                device)]
+        self._remove_rule_from_chain_v4v6('FORWARD', jump_rule, jump_rule)
 
     def update_security_group_rules(self, sg_id, sg_rules):
         LOG.debug("Update rules of security group (%s)", sg_id)
@@ -205,14 +237,14 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
         for pname in sorted(ports):
             port = ports[pname]
             self._add_conntrack_jump(port)
-            self._setup_chain(port, firewall.INGRESS_DIRECTION)
-            self._setup_chain(port, firewall.EGRESS_DIRECTION)
+            self._setup_chain(port, constants.INGRESS_DIRECTION)
+            self._setup_chain(port, constants.EGRESS_DIRECTION)
         self.iptables.ipv4['filter'].add_rule(SG_CHAIN, '-j ACCEPT')
         self.iptables.ipv6['filter'].add_rule(SG_CHAIN, '-j ACCEPT')
 
         for port in unfiltered_ports.values():
-            self._add_accept_rule_port_sec(port, firewall.INGRESS_DIRECTION)
-            self._add_accept_rule_port_sec(port, firewall.EGRESS_DIRECTION)
+            self._add_accept_rule_port_sec(port, constants.INGRESS_DIRECTION)
+            self._add_accept_rule_port_sec(port, constants.EGRESS_DIRECTION)
 
     def _remove_chains(self):
         """Remove ingress and egress chain for a port."""
@@ -222,13 +254,13 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
 
     def _remove_chains_apply(self, ports, unfiltered_ports):
         for port in ports.values():
-            self._remove_chain(port, firewall.INGRESS_DIRECTION)
-            self._remove_chain(port, firewall.EGRESS_DIRECTION)
+            self._remove_chain(port, constants.INGRESS_DIRECTION)
+            self._remove_chain(port, constants.EGRESS_DIRECTION)
             self._remove_chain(port, SPOOF_FILTER)
             self._remove_conntrack_jump(port)
         for port in unfiltered_ports.values():
-            self._remove_rule_port_sec(port, firewall.INGRESS_DIRECTION)
-            self._remove_rule_port_sec(port, firewall.EGRESS_DIRECTION)
+            self._remove_rule_port_sec(port, constants.INGRESS_DIRECTION)
+            self._remove_rule_port_sec(port, constants.EGRESS_DIRECTION)
         self._remove_chain_by_name_v4v6(SG_CHAIN)
 
     def _setup_chain(self, port, DIRECTION):
@@ -266,6 +298,8 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
                                                   comment=comment)
 
     def _get_device_name(self, port):
+        if not isinstance(port, dict):
+            return port
         return port['device']
 
     def _update_port_sec_rules(self, port, direction, add=False):
@@ -281,7 +315,7 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
         else:
             self._remove_rule_from_chain_v4v6('FORWARD', jump_rule, jump_rule)
 
-        if direction == firewall.EGRESS_DIRECTION:
+        if direction == constants.EGRESS_DIRECTION:
             if add:
                 self._add_rules_to_chain_v4v6('INPUT', jump_rule, jump_rule,
                                               comment=ic.PORT_SEC_ACCEPT)
@@ -315,7 +349,7 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
         self._add_rules_to_chain_v4v6(SG_CHAIN, jump_rule, jump_rule,
                                       comment=ic.SG_TO_VM_SG)
 
-        if direction == firewall.EGRESS_DIRECTION:
+        if direction == constants.EGRESS_DIRECTION:
             self._add_rules_to_chain_v4v6('INPUT', jump_rule, jump_rule,
                                           comment=ic.INPUT_TO_SG)
 
@@ -532,11 +566,11 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
         ipv4_iptables_rules = []
         ipv6_iptables_rules = []
         # include fixed egress/ingress rules
-        if direction == firewall.EGRESS_DIRECTION:
+        if direction == constants.EGRESS_DIRECTION:
             self._add_fixed_egress_rules(port,
                                          ipv4_iptables_rules,
                                          ipv6_iptables_rules)
-        elif direction == firewall.INGRESS_DIRECTION:
+        elif direction == constants.INGRESS_DIRECTION:
             ipv6_iptables_rules += self._accept_inbound_icmpv6()
         # include IPv4 and IPv6 iptable rules from security group
         ipv4_iptables_rules += self._convert_sgr_to_iptables_rules(
@@ -871,4 +905,6 @@ class OVSHybridIptablesFirewallDriver(IptablesFirewallDriver):
         return ('qvb' + port['device'])[:n_const.LINUX_DEV_LEN]
 
     def _get_device_name(self, port):
-        return get_hybrid_port_name(port['device'])
+        device_name = super(
+            OVSHybridIptablesFirewallDriver, self)._get_device_name(port)
+        return get_hybrid_port_name(device_name)

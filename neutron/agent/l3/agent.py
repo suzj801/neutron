@@ -16,6 +16,7 @@
 import eventlet
 import netaddr
 from neutron_lib.agent import constants as agent_consts
+from neutron_lib.agent import topics
 from neutron_lib.callbacks import events
 from neutron_lib.callbacks import registry
 from neutron_lib.callbacks import resources
@@ -54,7 +55,6 @@ from neutron.common import constants as l3_constants
 from neutron.common import exceptions as n_exc
 from neutron.common import ipv6_utils
 from neutron.common import rpc as n_rpc
-from neutron.common import topics
 from neutron.common import utils
 from neutron import manager
 
@@ -335,8 +335,8 @@ class L3NATAgent(ha.AgentMixin,
             # side of it, typically because it's landing on a node that needs
             # to provision a router namespace because of a DVR service port
             # (e.g. DHCP).
-            if (self.conf.agent_mode == lib_const.L3_AGENT_MODE_DVR_SNAT
-                    and router.get(lib_const.HA_INTERFACE_KEY) is not None):
+            if (self.conf.agent_mode == lib_const.L3_AGENT_MODE_DVR_SNAT and
+                    router.get(lib_const.HA_INTERFACE_KEY) is not None):
                 kwargs['state_change_callback'] = self.enqueue_state_change
                 return dvr_edge_ha_router.DvrEdgeHaRouter(*args, **kwargs)
 
@@ -489,14 +489,15 @@ class L3NATAgent(ha.AgentMixin,
         self.l3_ext_manager.add_router(self.context, router)
 
     def _process_updated_router(self, router):
+        ri = self.router_info[router['id']]
         is_dvr_only_agent = (self.conf.agent_mode in
                              [lib_const.L3_AGENT_MODE_DVR,
-                              l3_constants.L3_AGENT_MODE_DVR_NO_EXTERNAL])
+                              lib_const.L3_AGENT_MODE_DVR_NO_EXTERNAL])
+        is_ha_router = getattr(ri, 'ha_state', False)
         # For HA routers check that DB state matches actual state
-        if router.get('ha') and not is_dvr_only_agent:
+        if router.get('ha') and not is_dvr_only_agent and is_ha_router:
             self.check_ha_state_for_router(
                 router['id'], router.get(l3_constants.HA_ROUTER_STATE_KEY))
-        ri = self.router_info[router['id']]
         ri.router = router
         registry.notify(resources.ROUTER, events.BEFORE_UPDATE,
                         self, router=ri)

@@ -16,6 +16,7 @@
 import os
 
 import mock
+from neutron_lib.api import attributes
 from neutron_lib.api import converters
 from neutron_lib.callbacks import registry
 from neutron_lib import constants
@@ -35,7 +36,6 @@ import webtest
 
 from neutron.api import api_common
 from neutron.api import extensions
-from neutron.api.v2 import attributes
 from neutron.api.v2 import base as v2_base
 from neutron.api.v2 import router
 from neutron import policy
@@ -43,6 +43,7 @@ from neutron import quota
 from neutron.quota import resource_registry
 from neutron.tests import base
 from neutron.tests import fake_notifier
+from neutron.tests import tools
 from neutron.tests.unit import dummy_plugin
 from neutron.tests.unit import testlib_api
 
@@ -87,6 +88,7 @@ class APIv2TestBase(base.BaseTestCase):
         instance = self.plugin.return_value
         instance._NeutronPluginBaseV2__native_pagination_support = True
         instance._NeutronPluginBaseV2__native_sorting_support = True
+        tools.make_mock_plugin_json_encodable(instance)
 
         api = router.APIRouter()
         self.api = webtest.TestApp(api)
@@ -125,7 +127,7 @@ class APIv2TestCase(APIv2TestBase):
         return sorted(policy_attrs)
 
     def _do_field_list(self, resource, base_fields):
-        attr_info = attributes.RESOURCE_ATTRIBUTE_MAP[resource]
+        attr_info = attributes.RESOURCES[resource]
         policy_attrs = self._get_policy_attrs(attr_info)
         for name, info in attr_info.items():
             if info.get('primary_key'):
@@ -1260,7 +1262,7 @@ class V2Views(base.BaseTestCase):
     def _view(self, keys, collection, resource):
         data = dict((key, 'value') for key in keys)
         data['fake'] = 'value'
-        attr_info = attributes.RESOURCE_ATTRIBUTE_MAP[collection]
+        attr_info = attributes.RESOURCES[collection]
         controller = v2_base.Controller(None, collection, resource, attr_info)
         res = controller._view(context.get_admin_context(), data)
         self.assertNotIn('fake', res)

@@ -31,15 +31,16 @@ HA_ROUTER_STATE_KEY = '_ha_state'
 METERING_LABEL_KEY = '_metering_labels'
 FLOATINGIP_AGENT_INTF_KEY = '_floatingip_agent_interfaces'
 SNAT_ROUTER_INTF_KEY = '_snat_router_interfaces'
-DVR_SNAT_BOUND = 'dvr_snat_bound'
-L3_AGENT_MODE_DVR_NO_EXTERNAL = 'dvr_no_external'
 
 HA_NETWORK_NAME = 'HA network tenant %s'
 HA_SUBNET_NAME = 'HA subnet tenant %s'
 HA_PORT_NAME = 'HA port tenant %s'
 HA_ROUTER_STATE_ACTIVE = 'active'
 HA_ROUTER_STATE_STANDBY = 'standby'
-VALID_HA_STATES = (HA_ROUTER_STATE_ACTIVE, HA_ROUTER_STATE_STANDBY)
+HA_ROUTER_STATE_UNKNOWN = 'unknown'
+VALID_HA_STATES = (HA_ROUTER_STATE_ACTIVE, HA_ROUTER_STATE_STANDBY,
+                   HA_ROUTER_STATE_UNKNOWN)
+
 PAGINATION_INFINITE = 'infinite'
 
 SORT_DIRECTION_ASC = 'asc'

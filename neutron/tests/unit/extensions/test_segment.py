@@ -27,13 +27,14 @@ from neutron_lib.callbacks import resources
 from neutron_lib import constants
 from neutron_lib import context
 from neutron_lib import exceptions as n_exc
+from neutron_lib.exceptions import placement as placement_exc
 from neutron_lib.plugins import directory
 from novaclient import exceptions as nova_exc
 from oslo_config import cfg
 from oslo_utils import uuidutils
 import webob.exc
 
-from neutron.common import exceptions as neutron_exc
+from neutron.conf.plugins.ml2 import config as ml2_config
 from neutron.conf.plugins.ml2.drivers import driver_type
 from neutron.db import agents_db
 from neutron.db import agentschedulers_db
@@ -1459,6 +1460,8 @@ class TestNovaSegmentNotifier(SegmentAwareIpamTestCase):
     _mechanism_drivers = ['openvswitch', 'logger']
 
     def setUp(self):
+        ml2_config.register_ml2_plugin_opts()
+        driver_type.register_ml2_drivers_vlan_opts()
         cfg.CONF.set_override('mechanism_drivers',
                               self._mechanism_drivers,
                               group='ml2')
@@ -1504,6 +1507,19 @@ class TestNovaSegmentNotifier(SegmentAwareIpamTestCase):
                 reserved += 1
         return total, reserved
 
+    def test__create_nova_inventory_no_microversion(self):
+        network, segment = self._create_test_network_and_segment()
+        segment_id = segment['segment']['id']
+        aggregate = mock.Mock(spec=["id"])
+        aggregate.id = 1
+        self.mock_n_client.aggregates.create.return_value = aggregate
+        with mock.patch.object(seg_plugin.LOG, 'exception') as log:
+            self.assertRaises(
+                AttributeError,
+                self.segments_plugin.nova_updater._create_nova_inventory,
+                segment_id, 63, 2, [])
+            self.assertTrue(log.called)
+
     def _assert_inventory_creation(self, segment_id, aggregate, subnet):
         self.batch_notifier._notify()
         self.mock_p_client.get_inventory.assert_called_with(
@@ -1539,7 +1555,7 @@ class TestNovaSegmentNotifier(SegmentAwareIpamTestCase):
         segment_id = segment['segment']['id']
         self._setup_host_mappings([(segment_id, 'fakehost')])
         self.mock_p_client.get_inventory.side_effect = (
-            neutron_exc.PlacementResourceProviderNotFound(
+            placement_exc.PlacementResourceProviderNotFound(
                 resource_provider=segment_id,
                 resource_class=seg_plugin.IPV4_RESOURCE_CLASS))
         aggregate = mock.MagicMock()
@@ -1739,7 +1755,7 @@ class TestNovaSegmentNotifier(SegmentAwareIpamTestCase):
         self.batch_notifier._notify()
         self._assert_inventory_delete(segment_id, aggregate)
         self.mock_p_client.get_inventory.side_effect = (
-            neutron_exc.PlacementResourceProviderNotFound(
+            placement_exc.PlacementResourceProviderNotFound(
                 resource_provider=segment_id,
                 resource_class=seg_plugin.IPV4_RESOURCE_CLASS))
         aggregate.hosts = []
@@ -1782,7 +1798,7 @@ class TestNovaSegmentNotifier(SegmentAwareIpamTestCase):
             aggregate.id = 1
             aggregate.hosts = ['fakehost1']
             self.mock_p_client.list_aggregates.side_effect = (
-                neutron_exc.PlacementAggregateNotFound(
+                placement_exc.PlacementAggregateNotFound(
                     resource_provider=segment_id))
             self.mock_n_client.aggregates.list.return_value = [aggregate]
             host = 'otherfakehost'
@@ -1999,7 +2015,7 @@ class TestNovaSegmentNotifier(SegmentAwareIpamTestCase):
                 inventory, original_inventory = self._get_inventory(100, 2)
                 self.mock_p_client.get_inventory.return_value = inventory
                 self.mock_p_client.update_inventory.side_effect = (
-                    neutron_exc.PlacementInventoryUpdateConflict(
+                    placement_exc.PlacementInventoryUpdateConflict(
                         resource_provider=mock.ANY,
                         resource_class=seg_plugin.IPV4_RESOURCE_CLASS))
                 self.segments_plugin.nova_updater._update_nova_inventory(event)
@@ -2019,7 +2035,7 @@ class TestNovaSegmentNotifier(SegmentAwareIpamTestCase):
                 self.segments_plugin.nova_updater._update_nova_inventory,
                 mock.ANY, total=1, reserved=0)
             self.mock_p_client.get_inventory.side_effect = (
-                neutron_exc.PlacementEndpointNotFound())
+                placement_exc.PlacementEndpointNotFound())
             self.segments_plugin.nova_updater._send_notifications([event])
             self.assertTrue(log.called)
 
@@ -2189,11 +2205,11 @@ class PlacementAPIClientTestCase(base.DietTestCase):
     def test_get_inventory_not_found_no_resource_provider(self):
         self._test_get_inventory_not_found(
             "No resource provider with uuid",
-            neutron_exc.PlacementResourceProviderNotFound)
+            placement_exc.PlacementResourceProviderNotFound)
 
     def test_get_inventory_not_found_no_inventory(self):
         self._test_get_inventory_not_found(
-            "No inventory of class", neutron_exc.PlacementInventoryNotFound)
+            "No inventory of class", placement_exc.PlacementInventoryNotFound)
 
     def test_get_inventory_not_found_unknown_cause(self):
         self._test_get_inventory_not_found("Unknown cause", ks_exc.NotFound)
@@ -2216,7 +2232,7 @@ class PlacementAPIClientTestCase(base.DietTestCase):
         expected_payload = 'fake_inventory'
         resource_class = 'fake_resource_class'
         self.mock_request.side_effect = ks_exc.Conflict
-        self.assertRaises(neutron_exc.PlacementInventoryUpdateConflict,
+        self.assertRaises(placement_exc.PlacementInventoryUpdateConflict,
                           self.client.update_inventory, rp_uuid,
                           expected_payload, resource_class)
 
@@ -2245,11 +2261,11 @@ class PlacementAPIClientTestCase(base.DietTestCase):
     def test_list_aggregates_not_found(self):
         rp_uuid = uuidutils.generate_uuid()
         self.mock_request.side_effect = ks_exc.NotFound
-        self.assertRaises(neutron_exc.PlacementAggregateNotFound,
+        self.assertRaises(placement_exc.PlacementAggregateNotFound,
                           self.client.list_aggregates, rp_uuid)
 
     def test_placement_api_not_found(self):
         rp_uuid = uuidutils.generate_uuid()
         self.mock_request.side_effect = ks_exc.EndpointNotFound
-        self.assertRaises(neutron_exc.PlacementEndpointNotFound,
+        self.assertRaises(placement_exc.PlacementEndpointNotFound,
                           self.client.list_aggregates, rp_uuid)

@@ -13,6 +13,7 @@
 #    under the License.
 
 import mock
+from neutron_lib.agent import topics
 from neutron_lib.api.definitions import external_net as extnet_apidef
 from neutron_lib.api.definitions import l3 as l3_apidef
 from neutron_lib.api.definitions import portbindings
@@ -25,7 +26,6 @@ from neutron_lib import context
 
 from neutron.api.rpc.handlers import l3_rpc
 from neutron.common import constants as n_const
-from neutron.common import topics
 from neutron.tests.common import helpers
 from neutron.tests.unit.plugins.ml2 import base as ml2_test_base
 
@@ -342,7 +342,7 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                     self.context, {'floatingip': floating_ip})
                 if dvr:
                     if test_agent_mode == (
-                        n_const.L3_AGENT_MODE_DVR_NO_EXTERNAL):
+                        constants.L3_AGENT_MODE_DVR_NO_EXTERNAL):
                         if router['ha']:
                             expected_calls = [
                                 mock.call(self.context,
@@ -373,7 +373,7 @@ class L3DvrTestCase(L3DvrTestCaseBase):
 
     def test_create_floating_ip_agent_notification_for_dvr_no_external_agent(
         self):
-        agent_mode = n_const.L3_AGENT_MODE_DVR_NO_EXTERNAL
+        agent_mode = constants.L3_AGENT_MODE_DVR_NO_EXTERNAL
         self._test_create_floating_ip_agent_notification(
             test_agent_mode=agent_mode)
 
@@ -438,7 +438,7 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                     {'floatingip': updated_floating_ip})
                 if dvr:
                     if test_agent_mode == (
-                        n_const.L3_AGENT_MODE_DVR_NO_EXTERNAL):
+                        constants.L3_AGENT_MODE_DVR_NO_EXTERNAL):
                         if router1['ha'] and router2['ha']:
                             self.assertEqual(
                                 4,
@@ -491,7 +491,7 @@ class L3DvrTestCase(L3DvrTestCaseBase):
 
     def test_update_floating_ip_agent_notification_with_dvr_no_external_agents(
         self):
-        agent_mode = n_const.L3_AGENT_MODE_DVR_NO_EXTERNAL
+        agent_mode = constants.L3_AGENT_MODE_DVR_NO_EXTERNAL
         self._test_update_floating_ip_agent_notification(
             test_agent_mode=agent_mode)
 
@@ -537,7 +537,7 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                     self.context, floating_ip['id'])
                 if dvr:
                     if test_agent_mode == (
-                        n_const.L3_AGENT_MODE_DVR_NO_EXTERNAL):
+                            constants.L3_AGENT_MODE_DVR_NO_EXTERNAL):
                         if router['ha']:
                             expected_calls = [
                                 mock.call(self.context,
@@ -568,7 +568,7 @@ class L3DvrTestCase(L3DvrTestCaseBase):
 
     def test_delete_floating_ip_agent_notification_with_dvr_no_external_agents(
         self):
-        agent_mode = n_const.L3_AGENT_MODE_DVR_NO_EXTERNAL
+        agent_mode = constants.L3_AGENT_MODE_DVR_NO_EXTERNAL
         self._test_delete_floating_ip_agent_notification(
             test_agent_mode=agent_mode)
 
@@ -746,7 +746,7 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                     self.l3_plugin.list_active_sync_routers_on_active_l3_agent(
                         self.context, self.l3_agent['host'], [router['id']]))
                 floatingips = router_info[0][constants.FLOATINGIP_KEY]
-                self.assertTrue(floatingips[0][n_const.DVR_SNAT_BOUND])
+                self.assertTrue(floatingips[0][constants.DVR_SNAT_BOUND])
 
     def test_dvr_process_floatingips_for_dvr_on_full_sync(self):
         HOST1 = 'host1'
@@ -818,7 +818,7 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                         self.context, self.l3_agent['host'], [router['id']]))
                 floatingips = router_info[0][constants.FLOATINGIP_KEY]
                 self.assertEqual(1, len(floatingips))
-                self.assertTrue(floatingips[0][n_const.DVR_SNAT_BOUND])
+                self.assertTrue(floatingips[0][constants.DVR_SNAT_BOUND])
                 self.assertEqual(n_const.FLOATING_IP_HOST_NEEDS_BINDING,
                                  floatingips[0]['host'])
                 router1_info = (
@@ -887,7 +887,7 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                     self.l3_plugin.list_active_sync_routers_on_active_l3_agent(
                         self.context, self.l3_agent['host'], [router['id']]))
                 floatingips = router_info[0][constants.FLOATINGIP_KEY]
-                self.assertTrue(floatingips[0][n_const.DVR_SNAT_BOUND])
+                self.assertTrue(floatingips[0][constants.DVR_SNAT_BOUND])
                 # Now do the host binding to the fip port
                 self.core_plugin.update_port(
                     self.context, int_port1['port']['id'],
@@ -901,13 +901,13 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                     self.l3_plugin.list_active_sync_routers_on_active_l3_agent(
                         self.context, HOST1, [router['id']]))
                 floatingips = updated_router_info[0][constants.FLOATINGIP_KEY]
-                self.assertFalse(floatingips[0].get(n_const.DVR_SNAT_BOUND))
+                self.assertFalse(floatingips[0].get(constants.DVR_SNAT_BOUND))
                 self.assertEqual(HOST1, floatingips[0]['host'])
 
     def test_dvr_router_centralized_floating_ip(self):
         HOST1 = 'host1'
         helpers.register_l3_agent(
-            host=HOST1, agent_mode=n_const.L3_AGENT_MODE_DVR_NO_EXTERNAL)
+            host=HOST1, agent_mode=constants.L3_AGENT_MODE_DVR_NO_EXTERNAL)
         router = self._create_router(ha=False)
         private_net1 = self._make_network(self.fmt, 'net1', True)
         kwargs = {'arg_list': (extnet_apidef.EXTERNAL,),
@@ -968,7 +968,17 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                     self.l3_plugin.list_active_sync_routers_on_active_l3_agent(
                         self.context, self.l3_agent['host'], [router['id']]))
                 floatingips = router_info[0][constants.FLOATINGIP_KEY]
-                self.assertTrue(floatingips[0][n_const.DVR_SNAT_BOUND])
+                self.assertTrue(floatingips[0][constants.DVR_SNAT_BOUND])
+                # Test case to make sure when an agent in this case
+                # dvr_no_external restarts and does a full sync, we need
+                # to make sure that the returned router_info has
+                # DVR_SNAT_BOUND flag enabled, otherwise the floating IP
+                # state would error out.
+                router_sync_info = (
+                    self.l3_plugin.list_active_sync_routers_on_active_l3_agent(
+                        self.context, HOST1, [router['id']]))
+                floatingips = router_sync_info[0][constants.FLOATINGIP_KEY]
+                self.assertTrue(floatingips[0][constants.DVR_SNAT_BOUND])
 
     def test_allowed_addr_pairs_delayed_fip_and_update_arp_entry(self):
         HOST1 = 'host1'
@@ -1035,7 +1045,8 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                 vm_arp_table = {
                     'ip_address': vm_port_fixed_ips[0]['ip_address'],
                     'mac_address': vm_port_mac,
-                    'subnet_id': vm_port_subnet_id}
+                    'subnet_id': vm_port_subnet_id,
+                    'nud_state': 'permanent'}
                 vm_port2 = self.core_plugin.update_port(
                     self.context, int_port2['port']['id'],
                     {'port': {portbindings.HOST_ID: HOST2}})
@@ -1087,7 +1098,8 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                 vrrp_arp_table1 = {
                     'ip_address': vrrp_port_fixed_ips[0]['ip_address'],
                     'mac_address': vm_port_mac,
-                    'subnet_id': vrrp_port_subnet_id}
+                    'subnet_id': vrrp_port_subnet_id,
+                    'nud_state': 'reachable'}
 
                 expected_calls = [
                         mock.call(self.context,
@@ -1107,7 +1119,7 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                     self.l3_plugin.list_active_sync_routers_on_active_l3_agent(
                         self.context, self.l3_agent['host'], [router['id']]))
                 floatingips = router_info[0][constants.FLOATINGIP_KEY]
-                self.assertTrue(floatingips[0][n_const.DVR_SNAT_BOUND])
+                self.assertTrue(floatingips[0][constants.DVR_SNAT_BOUND])
 
     def test_dvr_gateway_host_binding_is_set(self):
         router = self._create_router(ha=False)
@@ -1202,7 +1214,8 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                 vm_arp_table = {
                     'ip_address': vm_port_fixed_ips[0]['ip_address'],
                     'mac_address': vm_port_mac,
-                    'subnet_id': vm_port_subnet_id}
+                    'subnet_id': vm_port_subnet_id,
+                    'nud_state': 'permanent'}
                 self.assertEqual(1, l3_notifier.add_arp_entry.call_count)
                 floating_ip = {'floating_network_id': ext_net['network']['id'],
                                'router_id': router['id'],
@@ -1231,7 +1244,8 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                 vrrp_arp_table1 = {
                     'ip_address': vrrp_port_fixed_ips[0]['ip_address'],
                     'mac_address': vm_port_mac,
-                    'subnet_id': vrrp_port_subnet_id}
+                    'subnet_id': vrrp_port_subnet_id,
+                    'nud_state': 'reachable'}
 
                 expected_calls = [
                         mock.call(self.context,

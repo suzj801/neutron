@@ -30,7 +30,6 @@ scalability and HA.
       | agent                                                       | agent                     |
       | Subnet Allocation                                           | subnet_allocation         |
       | L3 Agent Scheduler                                          | l3_agent_scheduler        |
-      | Tag support                                                 | tag                       |
       | Neutron external network                                    | external-net              |
       | Neutron Service Flavors                                     | flavors                   |
       | Network MTU                                                 | net-mtu                   |
@@ -45,7 +44,6 @@ scalability and HA.
       | Resource timestamps                                         | standard-attr-timestamp   |
       | Neutron Service Type Management                             | service-type              |
       | Router Flavor Extension                                     | l3-flavors                |
-      | Tag support for resources: subnet, subnetpool, port, router | tag-ext                   |
       | Neutron Extra DHCP opts                                     | extra_dhcp_opt            |
       | Resource revision numbers                                   | standard-attr-revisions   |
       | Pagination support                                          | pagination                |
@@ -118,7 +116,7 @@ Configuration
       tenant_network_type = vlan
       network_vlan_ranges = physnet1:1000:2999
       [database]
-      connection = mysql://root:root@127.0.0.1:3306/neutron_linux_bridge
+      connection = mysql+pymysql://root:root@127.0.0.1:3306/neutron_linux_bridge
       retry_interval = 2
       [linux_bridge]
       physical_interface_mappings = physnet1:eth0

@@ -14,11 +14,14 @@
 #    under the License.
 
 from neutron_lib.api.definitions import external_net as extnet_apidef
+from neutron_lib.api.definitions import multiprovidernet as mpnet_apidef
 from neutron_lib.api.definitions import portbindings
 from neutron_lib.api.definitions import provider_net as provider
 from neutron_lib.api import validators
 from neutron_lib import constants
 from neutron_lib import exceptions as exc
+from neutron_lib.exceptions import multiprovidernet as mpnet_exc
+from neutron_lib.exceptions import vlantransparent as vlan_exc
 from neutron_lib.plugins.ml2 import api
 from oslo_config import cfg
 from oslo_log import log
@@ -29,8 +32,6 @@ from neutron._i18n import _
 from neutron.conf.plugins.ml2 import config
 from neutron.db import api as db_api
 from neutron.db import segments_db
-from neutron.extensions import multiprovidernet as mpnet
-from neutron.extensions import vlantransparent
 from neutron.plugins.ml2.common import exceptions as ml2_exc
 from neutron.plugins.ml2 import models
 
@@ -108,14 +109,15 @@ class TypeManager(stevedore.named.NamedExtensionManager):
                for attr in provider.ATTRIBUTES):
             # Verify that multiprovider and provider attributes are not set
             # at the same time.
-            if validators.is_attr_set(network.get(mpnet.SEGMENTS)):
-                raise mpnet.SegmentsSetInConjunctionWithProviders()
+            if validators.is_attr_set(network.get(mpnet_apidef.SEGMENTS)):
+                raise mpnet_exc.SegmentsSetInConjunctionWithProviders()
             segment = self._get_provider_segment(network)
             return [self._process_provider_segment(segment)]
-        elif validators.is_attr_set(network.get(mpnet.SEGMENTS)):
+        elif validators.is_attr_set(network.get(mpnet_apidef.SEGMENTS)):
             segments = [self._process_provider_segment(s)
-                        for s in network[mpnet.SEGMENTS]]
-            mpnet.check_duplicate_segments(segments, self.is_partial_segment)
+                        for s in network[mpnet_apidef.SEGMENTS]]
+            mpnet_apidef.check_duplicate_segments(
+                segments, self.is_partial_segment)
             return segments
 
     def _match_segment(self, segment, filters):
@@ -137,8 +139,8 @@ class TypeManager(stevedore.named.NamedExtensionManager):
         if any(validators.is_attr_set(network.get(attr))
                for attr in provider.ATTRIBUTES):
             segments = [self._get_provider_segment(network)]
-        elif validators.is_attr_set(network.get(mpnet.SEGMENTS)):
-            segments = self._get_attribute(network, mpnet.SEGMENTS)
+        elif validators.is_attr_set(network.get(mpnet_apidef.SEGMENTS)):
+            segments = self._get_attribute(network, mpnet_apidef.SEGMENTS)
         else:
             return True
         return any(self._match_segment(s, filters) for s in segments)
@@ -167,7 +169,7 @@ class TypeManager(stevedore.named.NamedExtensionManager):
             for attr in provider.ATTRIBUTES:
                 network[attr] = None
         elif len(segments) > 1:
-            network[mpnet.SEGMENTS] = [
+            network[mpnet_apidef.SEGMENTS] = [
                 {provider.NETWORK_TYPE: segment[api.NETWORK_TYPE],
                  provider.PHYSICAL_NETWORK: segment[api.PHYSICAL_NETWORK],
                  provider.SEGMENTATION_ID: segment[api.SEGMENTATION_ID]}
@@ -396,14 +398,14 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         """Helper method for checking vlan transparecncy support.
 
         :param context: context parameter to pass to each method call
-        :raises: neutron.extensions.vlantransparent.
+        :raises: neutron_lib.exceptions.vlantransparent.
         VlanTransparencyDriverError if any mechanism driver doesn't
         support vlan transparency.
         """
         if context.current.get('vlan_transparent'):
             for driver in self.ordered_mech_drivers:
                 if not driver.obj.check_vlan_transparency(context):
-                    raise vlantransparent.VlanTransparencyDriverError()
+                    raise vlan_exc.VlanTransparencyDriverError()
 
     def _call_on_drivers(self, method_name, context,
                          continue_on_failure=False, raise_db_retriable=False):
@@ -854,8 +856,12 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         segment_ids_to_bind = {s[api.SEGMENTATION_ID]
                                for s in segments_to_bind}
         for level in binding_levels:
-            if (level.driver == driver and
-                level.segment_id in segment_ids_to_bind):
+            if (level.driver == driver.name and
+                    level.segment_id in segment_ids_to_bind):
+                LOG.debug("segment %(segment)s is already bound "
+                          "by driver %(driver)s",
+                          {"segment": level.segment_id,
+                           "driver": level.driver})
                 return False
         return True
 

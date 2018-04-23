@@ -13,6 +13,7 @@
 
 import re
 
+import eventlet
 import netaddr
 from oslo_concurrency import lockutils
 from oslo_log import log as logging
@@ -24,6 +25,26 @@ from neutron.common import exceptions as n_exc
 LOG = logging.getLogger(__name__)
 CONTRACK_MGRS = {}
 MAX_CONNTRACK_ZONES = 65535
+ZONE_START = 4097
+
+WORKERS = 8
+
+
+class IpConntrackUpdate(object):
+    """Encapsulates a conntrack update
+
+    An instance of this object carries the information necessary to
+    process a request to update the conntrack table.
+    """
+    def __init__(self, device_info_list, rule, remote_ips):
+        self.device_info_list = device_info_list
+        self.rule = rule
+        self.remote_ips = remote_ips
+
+    def __repr__(self):
+        return ('<IpConntrackUpdate(device_info_list=%s, rule=%s, '
+                'remote_ips=%s>' % (self.device_info_list, self.rule,
+                                    self.remote_ips))
 
 
 @lockutils.synchronized('conntrack')
@@ -52,6 +73,43 @@ class IpConntrackManager(object):
         self.unfiltered_ports = unfiltered_ports
         self.zone_per_port = zone_per_port  # zone per port vs per network
         self._populate_initial_zone_map()
+        self._queue = eventlet.queue.LightQueue()
+        self._start_process_queue()
+
+    def _start_process_queue(self):
+        LOG.debug("Starting ip_conntrack _process_queue_worker() threads")
+        pool = eventlet.GreenPool(size=WORKERS)
+        for i in range(WORKERS):
+            pool.spawn_n(self._process_queue_worker)
+
+    def _process_queue_worker(self):
+        # While it's technically not necessary to have this method, the
+        # 'while True' could just be in _process_queue(), the tests have
+        # to be able to drain the queue without blocking, so _process_queue()
+        # is made standalone.
+        while True:
+            self._process_queue()
+
+    def _process_queue(self):
+        update = None
+        try:
+            # this will block until an entry gets added to the queue
+            update = self._queue.get()
+            if update.remote_ips:
+                for remote_ip in update.remote_ips:
+                    self._delete_conntrack_state(
+                        update.device_info_list, update.rule, remote_ip)
+            else:
+                self._delete_conntrack_state(
+                    update.device_info_list, update.rule)
+        except Exception:
+            LOG.exception("Failed to process ip_conntrack queue entry: %s",
+                          update)
+
+    def _process(self, device_info_list, rule, remote_ips=None):
+        # queue the update to allow the caller to resume its work
+        update = IpConntrackUpdate(device_info_list, rule, remote_ips)
+        self._queue.put(update)
 
     @staticmethod
     def _generate_conntrack_cmd_by_rule(rule, namespace):
@@ -109,19 +167,14 @@ class IpConntrackManager(object):
                 LOG.exception("Failed execute conntrack command %s", cmd)
 
     def delete_conntrack_state_by_rule(self, device_info_list, rule):
-        self._delete_conntrack_state(device_info_list, rule)
+        self._process(device_info_list, rule)
 
     def delete_conntrack_state_by_remote_ips(self, device_info_list,
                                              ethertype, remote_ips):
         for direction in ['ingress', 'egress']:
             rule = {'ethertype': str(ethertype).lower(),
                     'direction': direction}
-            if remote_ips:
-                for remote_ip in remote_ips:
-                    self._delete_conntrack_state(
-                        device_info_list, rule, remote_ip)
-            else:
-                self._delete_conntrack_state(device_info_list, rule)
+            self._process(device_info_list, rule, remote_ips)
 
     def _populate_initial_zone_map(self):
         """Setup the map between devices and zones based on current rules."""
@@ -186,15 +239,15 @@ class IpConntrackManager(object):
         # call set to dedup because old ports may be mapped to the same zone.
         zones_in_use = sorted(set(self._device_zone_map.values()))
         if not zones_in_use:
-            return 1
+            return ZONE_START
         # attempt to increment onto the highest used zone first. if we hit the
         # end, go back and look for any gaps left by removed devices.
         last = zones_in_use[-1]
         if last < MAX_CONNTRACK_ZONES:
-            return last + 1
+            return max(last + 1, ZONE_START)
         for index, used in enumerate(zones_in_use):
-            if used - index != 1:
+            if used - index != ZONE_START:
                 # gap found, let's use it!
-                return index + 1
+                return index + ZONE_START
         # conntrack zones exhausted :( :(
         raise n_exc.CTZoneExhaustedError()

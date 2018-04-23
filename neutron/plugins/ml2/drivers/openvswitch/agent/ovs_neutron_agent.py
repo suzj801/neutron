@@ -23,12 +23,14 @@ import time
 
 import netaddr
 from neutron_lib.agent import constants as agent_consts
+from neutron_lib.agent import topics
 from neutron_lib.api.definitions import portbindings
 from neutron_lib.callbacks import events as callback_events
 from neutron_lib.callbacks import registry
 from neutron_lib.callbacks import resources as callback_resources
 from neutron_lib import constants as n_const
 from neutron_lib import context
+from neutron_lib.plugins import utils as plugin_utils
 from neutron_lib.utils import helpers
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -52,10 +54,8 @@ from neutron.api.rpc.callbacks import resources
 from neutron.api.rpc.handlers import dvr_rpc
 from neutron.api.rpc.handlers import securitygroups_rpc as sg_rpc
 from neutron.common import config
-from neutron.common import topics
 from neutron.common import utils as n_utils
 from neutron.conf.agent import xenapi_conf
-from neutron.plugins.common import utils as p_utils
 from neutron.plugins.ml2.drivers.agent import capabilities
 from neutron.plugins.ml2.drivers.l2pop.rpc_manager import l2population_rpc
 from neutron.plugins.ml2.drivers.openvswitch.agent.common \
@@ -296,7 +296,6 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
 
         # The initialization is complete; we can start receiving messages
         self.connection.consume_in_threads()
-        self.dead_topics.consume_in_threads()
 
         self.quitting_rpc_timeout = agent_conf.quitting_rpc_timeout
 
@@ -352,8 +351,8 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
             if not local_vlan:
                 continue
             net_uuid = local_vlan_map.get('net_uuid')
-            if (net_uuid and net_uuid not in self._local_vlan_hints
-                and local_vlan != constants.DEAD_VLAN_TAG):
+            if (net_uuid and net_uuid not in self._local_vlan_hints and
+                    local_vlan != constants.DEAD_VLAN_TAG):
                 self.available_local_vlans.remove(local_vlan)
                 self._local_vlan_hints[local_vlan_map['net_uuid']] = \
                     local_vlan
@@ -388,29 +387,6 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
                                                      topics.AGENT,
                                                      consumers,
                                                      start_listening=False)
-        self.setup_old_topic_sinkhole()
-
-    def setup_old_topic_sinkhole(self):
-        class SinkHole(object):
-            target = oslo_messaging.Target(version='1.4')
-
-            def __getattr__(self, attr):
-                return self._receiver
-
-            def _receiver(self, *args, **kwargs):
-                pass
-
-        # TODO(kevinbenton): remove this once oslo.messaging solves
-        # bug/1705351 so we can stop subscribing to these old topics
-        old_consumers = [[topics.PORT, topics.UPDATE],
-                         [topics.PORT, topics.DELETE],
-                         [topics.SECURITY_GROUP, topics.UPDATE],
-                         [topics.NETWORK, topics.UPDATE]]
-        self._sinkhole = SinkHole()
-        self.dead_topics = agent_rpc.create_consumers(
-            [self._sinkhole], topics.AGENT, old_consumers,
-            start_listening=False
-        )
 
     def port_update(self, context, **kwargs):
         port = kwargs.get('port')
@@ -1125,9 +1101,9 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
             self.phys_brs[physical_network] = br
 
             # interconnect physical and integration bridges using veth/patches
-            int_if_name = p_utils.get_interface_name(
+            int_if_name = plugin_utils.get_interface_name(
                 bridge, prefix=constants.PEER_INTEGRATION_PREFIX)
-            phys_if_name = p_utils.get_interface_name(
+            phys_if_name = plugin_utils.get_interface_name(
                 bridge, prefix=constants.PEER_PHYSICAL_PREFIX)
             # Interface type of port for physical and integration bridges must
             # be same, so check only one of them.
@@ -1391,8 +1367,8 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
         for lvm in self.vlan_manager:
             for port in lvm.vif_ports.values():
                 if (
-                    port.port_name in port_tags
-                    and port_tags[port.port_name] != lvm.vlan
+                    port.port_name in port_tags and
+                    port_tags[port.port_name] != lvm.vlan
                 ):
                     LOG.info(
                         "Port '%(port_name)s' has lost "
@@ -1802,8 +1778,12 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
                 port_info.get('updated'))
 
     def check_ovs_status(self):
-        # Check for the canary flow
-        status = self.int_br.check_canary_table()
+        try:
+            # Check for the canary flow
+            status = self.int_br.check_canary_table()
+        except Exception:
+            LOG.exception("Failure while checking for the canary flow")
+            status = constants.OVS_DEAD
         if status == constants.OVS_RESTARTED:
             LOG.warning("OVS is restarted. OVSNeutronAgent will reset "
                         "bridges and recover ports.")
@@ -1974,6 +1954,35 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
             ancillary_devices_not_to_retry)
         return new_failed_devices_retries_map
 
+    def _handle_ovs_restart(self, polling_manager):
+        self.setup_integration_br()
+        self.setup_physical_bridges(self.bridge_mappings)
+        if self.enable_tunneling:
+            self._reset_tunnel_ofports()
+            self.setup_tunnel_br()
+            self.setup_tunnel_br_flows()
+        if self.enable_distributed_routing:
+            self.dvr_agent.reset_ovs_parameters(self.int_br,
+                                         self.tun_br,
+                                         self.patch_int_ofport,
+                                         self.patch_tun_ofport)
+            self.dvr_agent.reset_dvr_parameters()
+            self.dvr_agent.setup_dvr_flows()
+        # notify that OVS has restarted
+        registry.notify(
+            callback_resources.AGENT,
+            callback_events.OVS_RESTARTED,
+            self)
+        # restart the polling manager so that it will signal as added
+        # all the current ports
+        # REVISIT (rossella_s) Define a method "reset" in
+        # BasePollingManager that will be implemented by AlwaysPoll as
+        # no action and by InterfacePollingMinimizer as start/stop
+        if isinstance(
+            polling_manager, polling.InterfacePollingMinimizer):
+            polling_manager.stop()
+            polling_manager.start()
+
     def rpc_loop(self, polling_manager=None):
         if not polling_manager:
             polling_manager = polling.get_polling_manager(
@@ -2003,34 +2012,8 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
                       self.iter_num)
             ovs_status = self.check_ovs_status()
             if ovs_status == constants.OVS_RESTARTED:
-                self.setup_integration_br()
-                self.setup_physical_bridges(self.bridge_mappings)
-                if self.enable_tunneling:
-                    self._reset_tunnel_ofports()
-                    self.setup_tunnel_br()
-                    self.setup_tunnel_br_flows()
-                    tunnel_sync = True
-                if self.enable_distributed_routing:
-                    self.dvr_agent.reset_ovs_parameters(self.int_br,
-                                                 self.tun_br,
-                                                 self.patch_int_ofport,
-                                                 self.patch_tun_ofport)
-                    self.dvr_agent.reset_dvr_parameters()
-                    self.dvr_agent.setup_dvr_flows()
-                # notify that OVS has restarted
-                registry.notify(
-                    callback_resources.AGENT,
-                    callback_events.OVS_RESTARTED,
-                    self)
-                # restart the polling manager so that it will signal as added
-                # all the current ports
-                # REVISIT (rossella_s) Define a method "reset" in
-                # BasePollingManager that will be implemented by AlwaysPoll as
-                # no action and by InterfacePollingMinimizer as start/stop
-                if isinstance(
-                    polling_manager, polling.InterfacePollingMinimizer):
-                    polling_manager.stop()
-                    polling_manager.start()
+                self._handle_ovs_restart(polling_manager)
+                tunnel_sync = self.enable_tunneling or tunnel_sync
             elif ovs_status == constants.OVS_DEAD:
                 # Agent doesn't apply any operations when ovs is dead, to
                 # prevent unexpected failure or crash. Sleep and continue
@@ -2049,8 +2032,8 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
             devices_need_retry = (any(failed_devices.values()) or
                 any(failed_ancillary_devices.values()) or
                 ports_not_ready_yet)
-            if (self._agent_has_updates(polling_manager) or sync
-                    or devices_need_retry):
+            if (self._agent_has_updates(polling_manager) or sync or
+                    devices_need_retry):
                 try:
                     LOG.debug("Agent rpc_loop - iteration:%(iter_num)d - "
                               "starting polling. Elapsed:%(elapsed).3f",
@@ -2156,7 +2139,7 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
             self.catch_sigterm = False
         if self.catch_sighup:
             LOG.info("Agent caught SIGHUP, resetting.")
-            self.conf.reload_config_files()
+            self.conf.mutate_config_files()
             config.setup_logging()
             LOG.debug('Full set of CONF:')
             self.conf.log_opt_values(LOG, logging.DEBUG)
@@ -2169,8 +2152,8 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
             rpc_api.client.set_max_timeout(timeout)
 
     def _check_agent_configurations(self):
-        if (self.enable_distributed_routing and self.enable_tunneling
-            and not self.l2_pop):
+        if (self.enable_distributed_routing and self.enable_tunneling and
+            not self.l2_pop):
 
             raise ValueError(_("DVR deployments for VXLAN/GRE/Geneve "
                                "underlays require L2-pop to be enabled, "

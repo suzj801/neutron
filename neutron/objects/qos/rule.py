@@ -24,7 +24,6 @@ from oslo_versionedobjects import exception
 from oslo_versionedobjects import fields as obj_fields
 import six
 
-from neutron.db import api as db_api
 from neutron.db.qos import models as qos_db_model
 from neutron.objects import base
 from neutron.objects import common_types
@@ -32,9 +31,9 @@ from neutron.objects import common_types
 DSCP_MARK = 'dscp_mark'
 
 
-def get_rules(context, qos_policy_id):
+def get_rules(obj_cls, context, qos_policy_id):
     all_rules = []
-    with db_api.autonested_transaction(context.session):
+    with obj_cls.db_context_reader(context):
         for rule_type in qos_consts.VALID_RULE_TYPES:
             rule_cls_name = 'Qos%sRule' % helpers.camelize(rule_type)
             rule_cls = getattr(sys.modules[__name__], rule_cls_name)
@@ -66,6 +65,25 @@ class QosRule(base.NeutronDbObject):
     # should be redefined in subclasses
     rule_type = None
 
+    duplicates_compare_fields = ()
+
+    def duplicates(self, other_rule):
+        """Returns True if rules have got same values in fields defined in
+        'duplicates_compare_fields' list.
+
+        In case when subclass don't have defined any field in
+        duplicates_compare_fields, only rule types are compared.
+        """
+
+        if self.rule_type != other_rule.rule_type:
+            return False
+
+        if self.duplicates_compare_fields:
+            for field in self.duplicates_compare_fields:
+                if getattr(self, field) != getattr(other_rule, field):
+                    return False
+        return True
+
     def to_dict(self):
         dict_ = super(QosRule, self).to_dict()
         dict_['type'] = self.rule_type
@@ -95,8 +113,9 @@ class QosRule(base.NeutronDbObject):
         #    - Is a port QoS policy (not a network QoS policy)
         #    - Is not an internal network device (e.g. router) and is a network
         #      QoS policy and there is no port QoS policy
-        return (is_port_policy or ((is_router_gw or not is_network_device_port)
-                                   and is_network_policy_only))
+        return (is_port_policy or
+                ((is_router_gw or not is_network_device_port) and
+                 is_network_policy_only))
 
 
 @base.NeutronObjectRegistry.register
@@ -110,6 +129,8 @@ class QosBandwidthLimitRule(QosRule):
         'direction': common_types.FlowDirectionEnumField(
             default=constants.EGRESS_DIRECTION)
     }
+
+    duplicates_compare_fields = ['direction']
 
     rule_type = qos_consts.RULE_TYPE_BANDWIDTH_LIMIT
 
@@ -151,6 +172,8 @@ class QosMinimumBandwidthRule(QosRule):
         'min_kbps': obj_fields.IntegerField(nullable=True),
         'direction': common_types.FlowDirectionEnumField(),
     }
+
+    duplicates_compare_fields = ['direction']
 
     rule_type = qos_consts.RULE_TYPE_MINIMUM_BANDWIDTH
 

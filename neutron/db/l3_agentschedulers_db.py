@@ -13,7 +13,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from neutron_lib.api import extensions
 from neutron_lib import constants
+from neutron_lib.exceptions import agent as agent_exc
 from neutron_lib.plugins import constants as plugin_constants
 from neutron_lib.plugins import directory
 from oslo_config import cfg
@@ -22,8 +24,6 @@ from oslo_log import log as logging
 import oslo_messaging
 
 from neutron.agent.common import utils as agent_utils
-from neutron.common import constants as l_consts
-from neutron.common import utils as n_utils
 from neutron.conf.db import l3_agentschedulers_db
 from neutron.db import agentschedulers_db
 from neutron.db.models import l3agent as rb_model
@@ -95,7 +95,7 @@ class L3AgentSchedulerDbMixin(l3agentscheduler.L3AgentSchedulerPluginBase,
         agent_mode = self._get_agent_mode(agent)
 
         if agent_mode in [constants.L3_AGENT_MODE_DVR,
-                          l_consts.L3_AGENT_MODE_DVR_NO_EXTERNAL]:
+                          constants.L3_AGENT_MODE_DVR_NO_EXTERNAL]:
             raise l3agentscheduler.DVRL3CannotAssignToDvrAgent()
 
         if (agent_mode == constants.L3_AGENT_MODE_LEGACY and
@@ -182,7 +182,7 @@ class L3AgentSchedulerDbMixin(l3agentscheduler.L3AgentSchedulerPluginBase,
         agent = self._get_agent(context, agent_id)
         agent_mode = self._get_agent_mode(agent)
         if agent_mode in [constants.L3_AGENT_MODE_DVR,
-                          l_consts.L3_AGENT_MODE_DVR_NO_EXTERNAL]:
+                          constants.L3_AGENT_MODE_DVR_NO_EXTERNAL]:
             raise l3agentscheduler.DVRL3CannotRemoveFromDvrAgent()
 
         self._unbind_router(context, router_id, agent_id)
@@ -275,8 +275,8 @@ class L3AgentSchedulerDbMixin(l3agentscheduler.L3AgentSchedulerPluginBase,
 
     def _get_active_l3_agent_routers_sync_data(self, context, host, agent,
                                                router_ids):
-        if n_utils.is_extension_supported(self,
-                                          constants.L3_HA_MODE_EXT_ALIAS):
+        if extensions.is_extension_supported(
+                self, constants.L3_HA_MODE_EXT_ALIAS):
             return self.get_ha_sync_data_for_host(context, host, agent,
                                                   router_ids=router_ids,
                                                   active=True)
@@ -284,8 +284,11 @@ class L3AgentSchedulerDbMixin(l3agentscheduler.L3AgentSchedulerPluginBase,
         return self.get_sync_data(context, router_ids=router_ids, active=True)
 
     def list_router_ids_on_host(self, context, host, router_ids=None):
-        agent = self._get_agent_by_type_and_host(
-            context, constants.AGENT_TYPE_L3, host)
+        try:
+            agent = self._get_agent_by_type_and_host(
+                context, constants.AGENT_TYPE_L3, host)
+        except agent_exc.AgentNotFoundByTypeHost:
+            return []
         if not agentschedulers_db.services_available(agent.admin_state_up):
             return []
         return self._get_router_ids_for_agent(context, agent, router_ids)
@@ -420,7 +423,7 @@ class L3AgentSchedulerDbMixin(l3agentscheduler.L3AgentSchedulerPluginBase,
             agent_mode = agent_conf.get(constants.L3_AGENT_MODE,
                                         constants.L3_AGENT_MODE_LEGACY)
             if (agent_mode == constants.L3_AGENT_MODE_DVR or
-                agent_mode == l_consts.L3_AGENT_MODE_DVR_NO_EXTERNAL or
+                agent_mode == constants.L3_AGENT_MODE_DVR_NO_EXTERNAL or
                     (agent_mode == constants.L3_AGENT_MODE_LEGACY and
                      is_router_distributed)):
                 continue

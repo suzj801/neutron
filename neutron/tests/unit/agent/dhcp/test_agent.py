@@ -1013,12 +1013,15 @@ class TestDhcpAgentEventHandler(base.BaseTestCase):
         payload = dict(port=fake_port2)
         self.cache.get_network_by_id.return_value = fake_network
         self.cache.get_port_by_id.return_value = fake_port2
-        self.dhcp.port_update_end(None, payload)
-        self.cache.assert_has_calls(
-            [mock.call.get_network_by_id(fake_port2.network_id),
-             mock.call.put_port(mock.ANY)])
-        self.call_driver.assert_called_once_with('reload_allocations',
-                                                 fake_network)
+        with mock.patch.object(
+                self.dhcp, 'update_isolated_metadata_proxy') as ump:
+            self.dhcp.port_update_end(None, payload)
+            self.cache.assert_has_calls(
+                [mock.call.get_network_by_id(fake_port2.network_id),
+                 mock.call.put_port(mock.ANY)])
+            self.call_driver.assert_called_once_with('reload_allocations',
+                                                     fake_network)
+            self.assertTrue(ump.called)
 
     def test_port_update_end_grabs_lock(self):
         payload = dict(port=fake_port2)
@@ -1034,12 +1037,15 @@ class TestDhcpAgentEventHandler(base.BaseTestCase):
         updated_fake_port1 = copy.deepcopy(fake_port1)
         updated_fake_port1.fixed_ips[0].ip_address = '172.9.9.99'
         self.cache.get_port_by_id.return_value = updated_fake_port1
-        self.dhcp.port_update_end(None, payload)
-        self.cache.assert_has_calls(
-            [mock.call.get_network_by_id(fake_port1.network_id),
-             mock.call.put_port(mock.ANY)])
-        self.call_driver.assert_has_calls(
-            [mock.call.call_driver('reload_allocations', fake_network)])
+        with mock.patch.object(
+                self.dhcp, 'update_isolated_metadata_proxy') as ump:
+            self.dhcp.port_update_end(None, payload)
+            self.cache.assert_has_calls(
+                [mock.call.get_network_by_id(fake_port1.network_id),
+                 mock.call.put_port(mock.ANY)])
+            self.call_driver.assert_has_calls(
+                [mock.call.call_driver('reload_allocations', fake_network)])
+            self.assertTrue(ump.called)
 
     def test_port_update_change_subnet_on_dhcp_agents_port(self):
         self.cache.get_network_by_id.return_value = fake_network
@@ -1092,15 +1098,18 @@ class TestDhcpAgentEventHandler(base.BaseTestCase):
         self.cache.get_network_by_id.return_value = fake_network
         self.cache.get_port_by_id.return_value = fake_port2
 
-        self.dhcp.port_delete_end(None, payload)
-        self.cache.assert_has_calls(
-            [mock.call.get_port_by_id(fake_port2.id),
-             mock.call.deleted_ports.add(fake_port2.id),
-             mock.call.get_port_by_id(fake_port2.id),
-             mock.call.get_network_by_id(fake_network.id),
-             mock.call.remove_port(fake_port2)])
-        self.call_driver.assert_has_calls(
-            [mock.call.call_driver('reload_allocations', fake_network)])
+        with mock.patch.object(
+                self.dhcp, 'update_isolated_metadata_proxy') as ump:
+            self.dhcp.port_delete_end(None, payload)
+            self.cache.assert_has_calls(
+                [mock.call.get_port_by_id(fake_port2.id),
+                 mock.call.deleted_ports.add(fake_port2.id),
+                 mock.call.get_port_by_id(fake_port2.id),
+                 mock.call.get_network_by_id(fake_network.id),
+                 mock.call.remove_port(fake_port2)])
+            self.call_driver.assert_has_calls(
+                [mock.call.call_driver('reload_allocations', fake_network)])
+            self.assertTrue(ump.called)
 
     def test_port_delete_end_unknown_port(self):
         payload = dict(port_id='unknown')
@@ -1463,7 +1472,13 @@ class TestDeviceManager(base.BaseTestCase):
                                             "IPWrapper")
         self.mock_ip_wrapper = self.mock_ip_wrapper_p.start()
 
-    def _test_setup_helper(self, device_is_ready, net=None, port=None):
+        self.mock_ipv6_enabled_p = mock.patch('neutron.common.ipv6_utils.'
+                                              'is_enabled_and_bind_by_default')
+        self.mock_ipv6_enabled = self.mock_ipv6_enabled_p.start()
+        self.mock_ipv6_enabled.return_value = True
+
+    def _test_setup_helper(self, device_is_ready, ipv6_enabled=True,
+                           net=None, port=None):
         net = net or fake_network
         port = port or fake_port1
         plugin = mock.Mock()
@@ -1491,24 +1506,26 @@ class TestDeviceManager(base.BaseTestCase):
                             '169.254.169.254/16']
         else:
             expected_ips = ['172.9.9.9/24', '169.254.169.254/16']
-        expected = [
-            mock.call.get_device_name(port),
-            mock.call.configure_ipv6_ra(net.namespace, 'default', 0),
-            mock.call.init_l3(
-                'tap12345678-12',
-                expected_ips,
-                namespace=net.namespace)]
+
+        expected = [mock.call.get_device_name(port)]
+
+        if ipv6_enabled:
+            expected.append(
+                mock.call.configure_ipv6_ra(net.namespace, 'default', 0))
 
         if not device_is_ready:
-            expected.insert(2,
-                            mock.call.plug(net.id,
+            expected.append(mock.call.plug(net.id,
                                            port.id,
                                            'tap12345678-12',
                                            'aa:bb:cc:dd:ee:ff',
                                            namespace=net.namespace,
                                            mtu=None))
-        self.mock_driver.assert_has_calls(expected)
+        expected.append(mock.call.init_l3(
+                        'tap12345678-12',
+                        expected_ips,
+                        namespace=net.namespace))
 
+        self.mock_driver.assert_has_calls(expected)
         dh._set_default_route.assert_called_once_with(net, 'tap12345678-12')
 
     def test_setup(self):
@@ -1516,6 +1533,12 @@ class TestDeviceManager(base.BaseTestCase):
         self._test_setup_helper(False)
         cfg.CONF.set_override('enable_metadata_network', True)
         self._test_setup_helper(False)
+
+    def test_setup_without_ipv6_enabled(self):
+        # NOTE(mjozefcz): This test checks if IPv6 RA is *not*
+        # configured when host doesn't support IPv6.
+        self.mock_ipv6_enabled.return_value = False
+        self._test_setup_helper(False, ipv6_enabled=False)
 
     def test_setup_calls_fill_dhcp_udp_checksums(self):
         self._test_setup_helper(False)

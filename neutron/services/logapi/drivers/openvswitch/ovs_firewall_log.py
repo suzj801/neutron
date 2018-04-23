@@ -22,7 +22,6 @@ from oslo_log import log as logging
 from ryu.base import app_manager
 from ryu.lib.packet import packet
 
-from neutron.agent import firewall
 from neutron.agent.linux.openvswitch_firewall import constants as ovsfw_consts
 from neutron.agent.linux.openvswitch_firewall import firewall as ovsfw
 from neutron.agent.linux.openvswitch_firewall import rules
@@ -131,7 +130,8 @@ class OVSFirewallLoggingDriver(log_ext.LoggingDriver):
         ovs_consts.OPENFLOW14,
     ]
 
-    def __init__(self, integration_bridge):
+    def __init__(self, agent_api):
+        integration_bridge = agent_api.request_int_br()
         self.int_br = self.initialize_bridge(integration_bridge)
         self._deferred = False
         self.log_ports = collections.defaultdict(dict)
@@ -381,9 +381,9 @@ class OVSFirewallLoggingDriver(log_ext.LoggingDriver):
             'reg_remote_group': self.conj_id_map.get_conj_id(
                 secgroup_id, remote_sg_id, direction, ethertype) + 1,
         }
-        if direction == firewall.INGRESS_DIRECTION:
+        if direction == lib_const.INGRESS_DIRECTION:
             flow_template['table'] = ovs_consts.RULES_INGRESS_TABLE
-        elif direction == firewall.EGRESS_DIRECTION:
+        elif direction == lib_const.EGRESS_DIRECTION:
             flow_template['table'] = ovs_consts.RULES_EGRESS_TABLE
         return [flow_template]
 

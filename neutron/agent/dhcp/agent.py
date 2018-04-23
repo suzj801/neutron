@@ -18,6 +18,7 @@ import os
 
 import eventlet
 from neutron_lib.agent import constants as agent_consts
+from neutron_lib.agent import topics
 from neutron_lib import constants
 from neutron_lib import context
 from neutron_lib import exceptions
@@ -38,7 +39,6 @@ from neutron.agent.metadata import driver as metadata_driver
 from neutron.agent import rpc as agent_rpc
 from neutron.common import constants as n_const
 from neutron.common import rpc as n_rpc
-from neutron.common import topics
 from neutron.common import utils
 from neutron import manager
 
@@ -161,9 +161,9 @@ class DhcpAgent(manager.Manager):
                 # allocation pool or a port is  deleted to free up an IP, this
                 # will automatically be retried on the notification
                 self.schedule_resync(e, network.id)
-            if (isinstance(e, oslo_messaging.RemoteError)
-                and e.exc_type == 'NetworkNotFound'
-                or isinstance(e, exceptions.NetworkNotFound)):
+            if (isinstance(e, oslo_messaging.RemoteError) and
+                e.exc_type == 'NetworkNotFound' or
+                isinstance(e, exceptions.NetworkNotFound)):
                 LOG.debug("Network %s has been deleted.", network.id)
             else:
                 LOG.exception('Unable to %(action)s dhcp for %(net_id)s.',
@@ -440,6 +440,7 @@ class DhcpAgent(manager.Manager):
             self.cache.put_port(updated_port)
             self.call_driver(driver_action, network)
             self.dhcp_ready_ports.add(updated_port.id)
+            self.update_isolated_metadata_proxy(network)
 
     def _is_port_on_this_agent(self, port):
         thishost = utils.get_dhcp_agent_device_id(
@@ -470,6 +471,7 @@ class DhcpAgent(manager.Manager):
                 self.schedule_resync("Agent port was deleted", port.network_id)
             else:
                 self.call_driver('reload_allocations', network)
+                self.update_isolated_metadata_proxy(network)
 
     def update_isolated_metadata_proxy(self, network):
         """Spawn or kill metadata proxy.

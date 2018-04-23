@@ -2684,6 +2684,38 @@ class TestNetworksV2(NeutronDbPluginV2TestCase):
             port1 = self.deserialize(self.fmt, res1)
             self._delete('ports', port1['port']['id'])
 
+    def test_update_network_set_not_shared_other_tenant_access_via_rbac(self):
+        with self.network(shared=True) as network:
+            ctx = context.get_admin_context()
+            with db_api.context_manager.writer.using(ctx):
+                ctx.session.add(
+                    rbac_db_models.NetworkRBAC(
+                        object_id=network['network']['id'],
+                        action='access_as_shared',
+                        tenant_id=network['network']['tenant_id'],
+                        target_tenant='somebody_else')
+                )
+                ctx.session.add(
+                    rbac_db_models.NetworkRBAC(
+                        object_id=network['network']['id'],
+                        action='access_as_shared',
+                        tenant_id=network['network']['tenant_id'],
+                        target_tenant='one_more_somebody_else')
+                )
+            res1 = self._create_port(self.fmt,
+                                     network['network']['id'],
+                                     webob.exc.HTTPCreated.code,
+                                     tenant_id='somebody_else',
+                                     set_context=True)
+            data = {'network': {'shared': False}}
+            req = self.new_update_request('networks',
+                                          data,
+                                          network['network']['id'])
+            res = self.deserialize(self.fmt, req.get_response(self.api))
+            self.assertFalse(res['network']['shared'])
+            port1 = self.deserialize(self.fmt, res1)
+            self._delete('ports', port1['port']['id'])
+
     def test_update_network_set_not_shared_multi_tenants_returns_409(self):
         with self.network(shared=True) as network:
             res1 = self._create_port(self.fmt,
@@ -4318,9 +4350,9 @@ class TestSubnetsV2(NeutronDbPluginV2TestCase):
                                               'fe80::/64', ip_version=6,
                                               ipv6_ra_mode=addr_mode,
                                               ipv6_address_mode=addr_mode)
-            if (insert_db_reference_error or insert_address_allocated
-                or device_owner == constants.DEVICE_OWNER_ROUTER_SNAT
-                or device_owner in constants.ROUTER_INTERFACE_OWNERS):
+            if (insert_db_reference_error or insert_address_allocated or
+                device_owner == constants.DEVICE_OWNER_ROUTER_SNAT or
+                device_owner in constants.ROUTER_INTERFACE_OWNERS):
                 # DVR SNAT, router interfaces and DHCP ports should not have
                 # been updated with addresses from the new auto-address subnet
                 self.assertEqual(1, len(port['port']['fixed_ips']))
@@ -6676,7 +6708,7 @@ class DbOperationBoundMixin(object):
 
     def get_api_kwargs(self):
         context_ = self._get_context()
-        return {'set_context': True, 'tenant_id': context_.tenant}
+        return {'set_context': True, 'tenant_id': context_.project_id}
 
     def _list_and_record_queries(self, resource, query_params=None):
         kwargs = {'neutron_context': self._get_context()}

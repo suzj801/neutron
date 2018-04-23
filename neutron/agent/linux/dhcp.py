@@ -328,7 +328,6 @@ class Dnsmasq(DhcpLocalProcess):
             'dnsmasq',
             '--no-hosts',
             _no_resolv,
-            '--strict-order',
             '--except-interface=lo',
             '--pid-file=%s' % pid_file,
             '--dhcp-hostsfile=%s' % self.get_conf_file_name('host'),
@@ -930,10 +929,11 @@ class Dnsmasq(DhcpLocalProcess):
                  (isolated_subnets[subnet.id] and
                      self.conf.enable_isolated_metadata)) and
                     subnet.ip_version == 4):
-                subnet_dhcp_ip = subnet_to_interface_ip[subnet.id]
-                host_routes.append(
-                    '%s/32,%s' % (METADATA_DEFAULT_IP, subnet_dhcp_ip)
-                )
+                subnet_dhcp_ip = subnet_to_interface_ip.get(subnet.id)
+                if subnet_dhcp_ip:
+                    host_routes.append(
+                        '%s/32,%s' % (METADATA_DEFAULT_IP, subnet_dhcp_ip)
+                    )
             elif not isolated_subnets[subnet.id] and gateway:
                 host_routes.append(
                     '%s/32,%s' % (METADATA_DEFAULT_IP, gateway)
@@ -1155,9 +1155,9 @@ class DeviceManager(object):
 
         for subnet in network.subnets:
             skip_subnet = (
-                subnet.ip_version != ip_version
-                or not subnet.enable_dhcp
-                or subnet.gateway_ip is None)
+                subnet.ip_version != ip_version or
+                not subnet.enable_dhcp or
+                subnet.gateway_ip is None)
 
             if skip_subnet:
                 continue

@@ -27,9 +27,9 @@ from oslo_log import log as logging
 from oslo_utils import uuidutils
 import testscenarios
 
-from neutron.agent import firewall
 from neutron.agent.linux import iptables_firewall
 from neutron.agent.linux import openvswitch_firewall
+from neutron.agent.linux.openvswitch_firewall import constants as ovsfw_consts
 from neutron.cmd.sanity import checks
 from neutron.common import constants as n_const
 from neutron.conf.agent import securitygroups_rpc as security_config
@@ -284,10 +284,10 @@ class FirewallTestCase(BaseFirewallTestCase):
     def test_ingress_icmp_secgroup(self):
         # update the sg_group to make ping pass
         sg_rules = [{'ethertype': constants.IPv4,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_ICMP},
                     {'ethertype': constants.IPv4,
-                     'direction': firewall.EGRESS_DIRECTION}]
+                     'direction': constants.EGRESS_DIRECTION}]
 
         self.tester.assert_no_connection(protocol=self.tester.ICMP,
                                          direction=self.tester.INGRESS)
@@ -297,10 +297,10 @@ class FirewallTestCase(BaseFirewallTestCase):
 
     def test_mac_spoofing(self):
         sg_rules = [{'ethertype': constants.IPv4,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_ICMP},
                     {'ethertype': constants.IPv4,
-                     'direction': firewall.EGRESS_DIRECTION}]
+                     'direction': constants.EGRESS_DIRECTION}]
         self._apply_security_group_rules(self.FAKE_SECURITY_GROUP_ID, sg_rules)
 
         self.tester.assert_connection(protocol=self.tester.ICMP,
@@ -350,7 +350,7 @@ class FirewallTestCase(BaseFirewallTestCase):
 
     def test_ip_spoofing(self):
         sg_rules = [{'ethertype': constants.IPv4,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_ICMP}]
         self._apply_security_group_rules(self.FAKE_SECURITY_GROUP_ID, sg_rules)
         not_allowed_ip = "%s/24" % (
@@ -373,7 +373,7 @@ class FirewallTestCase(BaseFirewallTestCase):
         self.firewall.update_port_filter(self.src_port_desc)
 
         sg_rules = [{'ethertype': constants.IPv4,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_ICMP}]
         self._apply_security_group_rules(self.FAKE_SECURITY_GROUP_ID, sg_rules)
         not_allowed_ip = "%s/24" % (
@@ -389,10 +389,10 @@ class FirewallTestCase(BaseFirewallTestCase):
 
     def test_allowed_address_pairs(self):
         sg_rules = [{'ethertype': constants.IPv4,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_ICMP},
                     {'ethertype': constants.IPv4,
-                     'direction': firewall.EGRESS_DIRECTION}]
+                     'direction': constants.EGRESS_DIRECTION}]
         self._apply_security_group_rules(self.FAKE_SECURITY_GROUP_ID, sg_rules)
 
         port_mac = self.tester.vm_mac_address
@@ -500,7 +500,7 @@ class FirewallTestCase(BaseFirewallTestCase):
         port_min = 12345
         port_max = 12346
         sg_rules = [{'ethertype': constants.IPv4,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_TCP,
                      'port_range_min': port_min,
                      'port_range_max': port_max}]
@@ -523,7 +523,7 @@ class FirewallTestCase(BaseFirewallTestCase):
         source_port_min = 12345
         source_port_max = 12346
         sg_rules = [{'ethertype': constants.IPv4,
-                     'direction': firewall.EGRESS_DIRECTION,
+                     'direction': constants.EGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_TCP,
                      'source_port_range_min': source_port_min,
                      'source_port_range_max': source_port_max}]
@@ -546,7 +546,7 @@ class FirewallTestCase(BaseFirewallTestCase):
     def test_established_connection_is_cut(self):
         port = 12345
         sg_rules = [{'ethertype': constants.IPv4,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_TCP,
                      'port_range_min': port,
                      'port_range_max': port}]
@@ -559,7 +559,6 @@ class FirewallTestCase(BaseFirewallTestCase):
         self._apply_security_group_rules(self.FAKE_SECURITY_GROUP_ID, list())
         self.tester.assert_no_established_connection(**connection)
 
-    @skip_if_firewall('openvswitch')
     def test_preventing_firewall_blink(self):
         direction = self.tester.INGRESS
         sg_rules = [{'ethertype': 'IPv4', 'direction': 'ingress',
@@ -629,6 +628,31 @@ class FirewallTestCase(BaseFirewallTestCase):
 
         self.tester.assert_net_unreachable(self.tester.EGRESS, '1.2.3.4')
 
+    @skip_if_firewall('iptables')
+    def test_tracked_connection(self):
+        # put an openflow rule to perform a CT lookup and hence packet will
+        # carry conntrack information
+        self.tester.bridge.add_flow(
+            table=0,
+            priority=200,
+            dl_type="0x0800",
+            ct_state=ovsfw_consts.OF_STATE_NOT_TRACKED,
+            actions="ct(table=0)"
+        )
+
+        # update the sg_group to make ping pass
+        sg_rules = [{'ethertype': constants.IPv4,
+                     'direction': constants.INGRESS_DIRECTION,
+                     'protocol': constants.PROTO_NAME_ICMP},
+                    {'ethertype': constants.IPv4,
+                     'direction': constants.EGRESS_DIRECTION}]
+
+        self.tester.assert_no_connection(protocol=self.tester.ICMP,
+                                         direction=self.tester.INGRESS)
+        self._apply_security_group_rules(self.FAKE_SECURITY_GROUP_ID, sg_rules)
+        self.tester.assert_connection(protocol=self.tester.ICMP,
+                                      direction=self.tester.INGRESS)
+
 
 class FirewallTestCaseIPv6(BaseFirewallTestCase):
     scenarios = BaseFirewallTestCase.scenarios_ovs_fw_interfaces
@@ -636,7 +660,7 @@ class FirewallTestCaseIPv6(BaseFirewallTestCase):
 
     def test_icmp_from_specific_address(self):
         sg_rules = [{'ethertype': constants.IPv6,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_ICMP,
                      'source_ip_prefix': self.tester.peer_ip_address}]
 
@@ -648,7 +672,7 @@ class FirewallTestCaseIPv6(BaseFirewallTestCase):
 
     def test_icmp_to_specific_address(self):
         sg_rules = [{'ethertype': constants.IPv6,
-                     'direction': firewall.EGRESS_DIRECTION,
+                     'direction': constants.EGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_ICMP,
                      'destination_ip_prefix': self.tester.peer_ip_address}]
 
@@ -660,7 +684,7 @@ class FirewallTestCaseIPv6(BaseFirewallTestCase):
 
     def test_tcp_from_specific_address(self):
         sg_rules = [{'ethertype': constants.IPv6,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_TCP,
                      'source_ip_prefix': self.tester.peer_ip_address}]
 
@@ -676,7 +700,7 @@ class FirewallTestCaseIPv6(BaseFirewallTestCase):
 
     def test_tcp_to_specific_address(self):
         sg_rules = [{'ethertype': constants.IPv6,
-                     'direction': firewall.EGRESS_DIRECTION,
+                     'direction': constants.EGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_TCP,
                      'destination_ip_prefix': self.tester.peer_ip_address}]
 
@@ -692,7 +716,7 @@ class FirewallTestCaseIPv6(BaseFirewallTestCase):
 
     def test_udp_from_specific_address(self):
         sg_rules = [{'ethertype': constants.IPv6,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_UDP,
                      'source_ip_prefix': self.tester.peer_ip_address}]
 
@@ -708,7 +732,7 @@ class FirewallTestCaseIPv6(BaseFirewallTestCase):
 
     def test_udp_to_specific_address(self):
         sg_rules = [{'ethertype': constants.IPv6,
-                     'direction': firewall.EGRESS_DIRECTION,
+                     'direction': constants.EGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_UDP,
                      'destination_ip_prefix': self.tester.peer_ip_address}]
 
@@ -725,7 +749,7 @@ class FirewallTestCaseIPv6(BaseFirewallTestCase):
     @skip_if_firewall('openvswitch')
     def test_ip_spoofing(self):
         sg_rules = [{'ethertype': constants.IPv6,
-                     'direction': firewall.INGRESS_DIRECTION,
+                     'direction': constants.INGRESS_DIRECTION,
                      'protocol': constants.PROTO_NAME_ICMP}]
         self._apply_security_group_rules(self.FAKE_SECURITY_GROUP_ID, sg_rules)
         not_allowed_ip = "%s/64" % (

@@ -20,6 +20,7 @@ import mock
 import netaddr
 from neutron_lib import exceptions
 import pyroute2
+from pyroute2.netlink.rtnl import ifinfmsg
 from pyroute2.netlink.rtnl import ndmsg
 from pyroute2 import NetlinkError
 import testtools
@@ -36,53 +37,6 @@ NETNS_SAMPLE = [
     'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
     'cccccccc-cccc-cccc-cccc-cccccccccccc']
 
-LINK_SAMPLE = [
-    '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 16436 qdisc noqueue state UNKNOWN \\'
-    'link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00 promiscuity 0',
-    '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP '
-    'qlen 1000\    link/ether cc:dd:ee:ff:ab:cd brd ff:ff:ff:ff:ff:ff'
-    '\    alias openvswitch',
-    '3: br-int: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN '
-    '\    link/ether aa:bb:cc:dd:ee:ff brd ff:ff:ff:ff:ff:ff promiscuity 0',
-    '4: gw-ddc717df-49: <BROADCAST,MULTICAST> mtu 1500 qdisc noop '
-    'state DOWN \    link/ether fe:dc:ba:fe:dc:ba brd ff:ff:ff:ff:ff:ff '
-    'promiscuity 0',
-    '5: foo:foo: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state '
-    'UP qlen 1000\    link/ether cc:dd:ee:ff:ab:cd brd ff:ff:ff:ff:ff:ff '
-    'promiscuity 0',
-    '6: foo@foo: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state '
-    'UP qlen 1000\    link/ether cc:dd:ee:ff:ab:cd brd ff:ff:ff:ff:ff:ff '
-    'promiscuity 0',
-    '7: foo:foo@foo: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq '
-    'state UP qlen 1000'
-    '\    link/ether cc:dd:ee:ff:ab:cd brd ff:ff:ff:ff:ff:ff promiscuity 0',
-    '8: foo@foo:foo: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq '
-    'state UP qlen 1000'
-    '\    link/ether cc:dd:ee:ff:ab:cd brd ff:ff:ff:ff:ff:ff promiscuity 0',
-    '9: bar.9@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc '
-    ' noqueue master brq0b24798c-07 state UP mode DEFAULT'
-    '\    link/ether ab:04:49:b6:ab:a0 brd ff:ff:ff:ff:ff:ff promiscuity 0'
-    '\    vlan protocol 802.1q id 9 <REORDER_HDR>',
-    '10: bar@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc '
-    ' noqueue master brq0b24798c-07 state UP mode DEFAULT'
-    '\    link/ether ab:04:49:b6:ab:a0 brd ff:ff:ff:ff:ff:ff promiscuity 0'
-    '\    vlan protocol 802.1Q id 10 <REORDER_HDR>',
-    '11: bar:bar@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq '
-    'state UP qlen 1000'
-    '\    link/ether cc:dd:ee:ff:ab:cd brd ff:ff:ff:ff:ff:ff promiscuity 0'
-    '\    vlan id 11 <REORDER_HDR>',
-    '12: bar@bar@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq '
-    'state UP qlen 1000'
-    '\    link/ether cc:dd:ee:ff:ab:cd brd ff:ff:ff:ff:ff:ff promiscuity 0'
-    '\    vlan id 12 <REORDER_HDR>',
-    '13: bar:bar@bar@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 '
-    'qdisc mq state UP qlen 1000'
-    '\    link/ether cc:dd:ee:ff:ab:cd brd ff:ff:ff:ff:ff:ff promiscuity 0'
-    '\    vlan protocol 802.1q id 13 <REORDER_HDR>',
-    '14: bar@bar:bar@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 '
-    'qdisc mq state UP qlen 1000'
-    '\    link/ether cc:dd:ee:ff:ab:cd brd ff:ff:ff:ff:ff:ff promiscuity 0'
-    '\    vlan protocol 802.1Q id 14 <REORDER_HDR>']
 
 ADDR_SAMPLE = ("""
 2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP qlen 1000
@@ -341,11 +295,10 @@ class TestIpWrapper(base.BaseTestCase):
         self.assertEqual(1, priv_listnetns.call_count)
         self.assertFalse(listnetns.called)
 
-    def test_add_tuntap(self):
+    @mock.patch.object(priv_lib, 'create_interface')
+    def test_add_tuntap(self, create):
         ip_lib.IPWrapper().add_tuntap('tap0')
-        self.execute.assert_called_once_with([], 'tuntap',
-                                             ('add', 'tap0', 'mode', 'tap'),
-                                             run_as_root=True, namespace=None)
+        create.assert_called_once_with('tap0', None, 'tuntap', mode='tap')
 
     def test_add_veth(self):
         ip_lib.IPWrapper().add_veth('tap0', 'tap1')
@@ -354,19 +307,17 @@ class TestIpWrapper(base.BaseTestCase):
                                               'peer', 'name', 'tap1'),
                                              run_as_root=True, namespace=None)
 
-    def test_add_macvtap(self):
+    @mock.patch.object(priv_lib, 'create_interface')
+    def test_add_macvtap(self, create):
         ip_lib.IPWrapper().add_macvtap('macvtap0', 'eth0', 'bridge')
-        self.execute.assert_called_once_with([], 'link',
-                                             ('add', 'link', 'eth0', 'name',
-                                              'macvtap0', 'type', 'macvtap',
-                                              'mode', 'bridge'),
-                                             run_as_root=True, namespace=None)
+        create.assert_called_once_with(
+            'macvtap0', None, 'macvtap', physical_interface='eth0',
+            mode='bridge')
 
-    def test_del_veth(self):
+    @mock.patch.object(priv_lib, 'delete_interface')
+    def test_del_veth(self, delete):
         ip_lib.IPWrapper().del_veth('fpr-1234')
-        self.execute.assert_called_once_with([], 'link',
-                                             ('del', 'fpr-1234'),
-                                             run_as_root=True, namespace=None)
+        delete.assert_called_once_with('fpr-1234', None)
 
     def test_add_veth_with_namespaces(self):
         ns2 = 'ns2'
@@ -379,12 +330,10 @@ class TestIpWrapper(base.BaseTestCase):
                                               'netns', ns2),
                                              run_as_root=True, namespace=None)
 
-    def test_add_dummy(self):
+    @mock.patch.object(priv_lib, 'create_interface')
+    def test_add_dummy(self, create):
         ip_lib.IPWrapper().add_dummy('dummy0')
-        self.execute.assert_called_once_with([], 'link',
-                                             ('add', 'dummy0',
-                                              'type', 'dummy'),
-                                             run_as_root=True, namespace=None)
+        create.assert_called_once_with('dummy0', None, 'dummy')
 
     def test_get_device(self):
         dev = ip_lib.IPWrapper(namespace='ns').device('eth0')
@@ -477,17 +426,42 @@ class TestIpWrapper(base.BaseTestCase):
                 self.assertNotIn(mock.call().delete('ns'),
                                  ip_ns_cmd_cls.mock_calls)
 
-    def test_add_vlan(self):
+    @mock.patch.object(priv_lib, 'create_interface')
+    def test_add_vlan(self, create):
         retval = ip_lib.IPWrapper().add_vlan('eth0.1', 'eth0', '1')
         self.assertIsInstance(retval, ip_lib.IPDevice)
         self.assertEqual(retval.name, 'eth0.1')
-        self.execute.assert_called_once_with([], 'link',
-                                             ['add', 'link', 'eth0',
-                                              'name', 'eth0.1',
-                                              'type', 'vlan', 'id', '1'],
-                                             run_as_root=True, namespace=None)
+        create.assert_called_once_with('eth0.1',
+                                       None,
+                                       'vlan',
+                                       physical_interface='eth0',
+                                       vlan_id='1')
 
-    def test_add_vxlan_valid_srcport_length(self):
+    @mock.patch.object(priv_lib, 'create_interface')
+    def test_add_vxlan_valid_srcport_length(self, create):
+        self.call_params = {}
+
+        def fake_create_interface(ifname, namespace, kind, **kwargs):
+            self.call_params = dict(
+                ifname=ifname,
+                namespace=namespace,
+                kind=kind,
+                **kwargs)
+
+        create.side_effect = fake_create_interface
+        expected_call_params = {
+            'ifname': 'vxlan0',
+            'namespace': None,
+            'kind': 'vxlan',
+            'vxlan_id': 'vni0',
+            'vxlan_group': 'group0',
+            'physical_interface': 'dev0',
+            'vxlan_ttl': 'ttl0',
+            'vxlan_tos': 'tos0',
+            'vxlan_local': 'local0',
+            'vxlan_proxy': True,
+            'vxlan_port_range': ('1', '2')}
+
         retval = ip_lib.IPWrapper().add_vxlan('vxlan0', 'vni0',
                                               group='group0',
                                               dev='dev0', ttl='ttl0',
@@ -496,14 +470,7 @@ class TestIpWrapper(base.BaseTestCase):
                                               srcport=(1, 2))
         self.assertIsInstance(retval, ip_lib.IPDevice)
         self.assertEqual(retval.name, 'vxlan0')
-        self.execute.assert_called_once_with([], 'link',
-                                             ['add', 'vxlan0', 'type',
-                                              'vxlan', 'id', 'vni0', 'group',
-                                              'group0', 'dev', 'dev0',
-                                              'ttl', 'ttl0', 'tos', 'tos0',
-                                              'local', 'local0', 'proxy',
-                                              'srcport', '1', '2'],
-                                             run_as_root=True, namespace=None)
+        self.assertDictEqual(expected_call_params, self.call_params)
 
     def test_add_vxlan_invalid_srcport_length(self):
         wrapper = ip_lib.IPWrapper()
@@ -521,7 +488,32 @@ class TestIpWrapper(base.BaseTestCase):
                           local='local0', proxy=True,
                           srcport=(2000, 1000))
 
-    def test_add_vxlan_dstport(self):
+    @mock.patch.object(priv_lib, 'create_interface')
+    def test_add_vxlan_dstport(self, create):
+        self.call_params = {}
+
+        def fake_create_interface(ifname, namespace, kind, **kwargs):
+            self.call_params = dict(
+                ifname=ifname,
+                namespace=namespace,
+                kind=kind,
+                **kwargs)
+
+        create.side_effect = fake_create_interface
+        expected_call_params = {
+            'ifname': 'vxlan0',
+            'namespace': None,
+            'kind': 'vxlan',
+            'vxlan_id': 'vni0',
+            'vxlan_group': 'group0',
+            'physical_interface': 'dev0',
+            'vxlan_ttl': 'ttl0',
+            'vxlan_tos': 'tos0',
+            'vxlan_local': 'local0',
+            'vxlan_proxy': True,
+            'vxlan_port_range': ('1', '2'),
+            'vxlan_port': 4789}
+
         retval = ip_lib.IPWrapper().add_vxlan('vxlan0', 'vni0',
                                               group='group0',
                                               dev='dev0', ttl='ttl0',
@@ -532,15 +524,7 @@ class TestIpWrapper(base.BaseTestCase):
 
         self.assertIsInstance(retval, ip_lib.IPDevice)
         self.assertEqual(retval.name, 'vxlan0')
-        self.execute.assert_called_once_with([], 'link',
-                                             ['add', 'vxlan0', 'type',
-                                              'vxlan', 'id', 'vni0', 'group',
-                                              'group0', 'dev', 'dev0',
-                                              'ttl', 'ttl0', 'tos', 'tos0',
-                                              'local', 'local0', 'proxy',
-                                              'srcport', '1', '2',
-                                              'dstport', '4789'],
-                                             run_as_root=True, namespace=None)
+        self.assertDictEqual(expected_call_params, self.call_params)
 
     def test_add_device_to_namespace(self):
         dev = mock.Mock()
@@ -678,7 +662,7 @@ class TestIpRuleCommand(TestIPCmdBase):
         ip_version = netaddr.IPNetwork(ip).version
         self.rule_cmd.delete(ip, table=table, priority=priority)
         self._assert_sudo([ip_version],
-                          ('del', 'priority', str(priority),
+                          ('del', 'from', ip, 'priority', str(priority),
                            'table', str(table), 'type', 'unicast'))
 
     def test__parse_line(self):
@@ -754,85 +738,72 @@ class TestIpRuleCommand(TestIPCmdBase):
 class TestIpLinkCommand(TestIPCmdBase):
     def setUp(self):
         super(TestIpLinkCommand, self).setUp()
-        self.parent._run.return_value = LINK_SAMPLE[1]
         self.command = 'link'
         self.link_cmd = ip_lib.IpLinkCommand(self.parent)
 
-    def test_set_address(self):
+    @mock.patch.object(priv_lib, 'set_link_attribute')
+    def test_set_address(self, set_link_attribute):
         self.link_cmd.set_address('aa:bb:cc:dd:ee:ff')
-        self._assert_sudo([], ('set', 'eth0', 'address', 'aa:bb:cc:dd:ee:ff'))
+        set_link_attribute.assert_called_once_with(
+            self.parent.name, self.parent.namespace,
+            address='aa:bb:cc:dd:ee:ff')
 
-    def test_set_allmulticast_on(self):
+    @mock.patch.object(priv_lib, 'set_link_flags')
+    def test_set_allmulticast_on(self, set_link_flags):
         self.link_cmd.set_allmulticast_on()
-        self._assert_sudo([], ('set', 'eth0', 'allmulticast', 'on'))
+        set_link_flags.assert_called_once_with(
+            self.parent.name, self.parent.namespace, ifinfmsg.IFF_ALLMULTI)
 
-    def test_set_mtu(self):
+    @mock.patch.object(priv_lib, 'set_link_attribute')
+    def test_set_mtu(self, set_link_attribute):
         self.link_cmd.set_mtu(1500)
-        self._assert_sudo([], ('set', 'eth0', 'mtu', 1500))
+        set_link_attribute.assert_called_once_with(
+            self.parent.name, self.parent.namespace, mtu=1500)
 
-    def test_set_up(self):
-        observed = self.link_cmd.set_up()
-        self.assertEqual(self.parent._as_root.return_value, observed)
-        self._assert_sudo([], ('set', 'eth0', 'up'))
+    @mock.patch.object(priv_lib, 'set_link_attribute')
+    def test_set_up(self, set_link_attribute):
+        self.link_cmd.set_up()
+        set_link_attribute.assert_called_once_with(
+            self.parent.name, self.parent.namespace, state='up')
 
-    def test_set_down(self):
-        observed = self.link_cmd.set_down()
-        self.assertEqual(self.parent._as_root.return_value, observed)
-        self._assert_sudo([], ('set', 'eth0', 'down'))
+    @mock.patch.object(priv_lib, 'set_link_attribute')
+    def test_set_down(self, set_link_attribute):
+        self.link_cmd.set_down()
+        set_link_attribute.assert_called_once_with(
+            self.parent.name, self.parent.namespace, state='down')
 
-    def test_set_netns(self):
+    @mock.patch.object(priv_lib, 'set_link_attribute')
+    def test_set_netns(self, set_link_attribute):
+        original_namespace = self.parent.namespace
         self.link_cmd.set_netns('foo')
-        self._assert_sudo([], ('set', 'eth0', 'netns', 'foo'))
+        set_link_attribute.assert_called_once_with(
+            'eth0', original_namespace, net_ns_fd='foo')
         self.assertEqual(self.parent.namespace, 'foo')
 
-    def test_set_name(self):
+    @mock.patch.object(priv_lib, 'set_link_attribute')
+    def test_set_name(self, set_link_attribute):
+        original_name = self.parent.name
         self.link_cmd.set_name('tap1')
-        self._assert_sudo([], ('set', 'eth0', 'name', 'tap1'))
+        set_link_attribute.assert_called_once_with(
+            original_name, self.parent.namespace, ifname='tap1')
         self.assertEqual(self.parent.name, 'tap1')
 
-    def test_set_alias(self):
+    @mock.patch.object(priv_lib, 'set_link_attribute')
+    def test_set_alias(self, set_link_attribute):
         self.link_cmd.set_alias('openvswitch')
-        self._assert_sudo([], ('set', 'eth0', 'alias', 'openvswitch'))
+        set_link_attribute.assert_called_once_with(
+            self.parent.name, self.parent.namespace, ifalias='openvswitch')
 
-    def test_delete(self):
+    @mock.patch.object(priv_lib, 'delete_interface')
+    def test_delete(self, delete):
         self.link_cmd.delete()
-        self._assert_sudo([], ('delete', 'eth0'))
+        delete.assert_called_once_with(self.parent.name, self.parent.namespace)
 
-    def test_address_property(self):
-        self.parent._execute = mock.Mock(return_value=LINK_SAMPLE[1])
-        self.assertEqual(self.link_cmd.address, 'cc:dd:ee:ff:ab:cd')
-
-    def test_mtu_property(self):
-        self.parent._execute = mock.Mock(return_value=LINK_SAMPLE[1])
-        self.assertEqual(self.link_cmd.mtu, 1500)
-
-    def test_qdisc_property(self):
-        self.parent._execute = mock.Mock(return_value=LINK_SAMPLE[1])
-        self.assertEqual(self.link_cmd.qdisc, 'mq')
-
-    def test_qlen_property(self):
-        self.parent._execute = mock.Mock(return_value=LINK_SAMPLE[1])
-        self.assertEqual(self.link_cmd.qlen, 1000)
-
-    def test_alias_property(self):
-        self.parent._execute = mock.Mock(return_value=LINK_SAMPLE[1])
-        self.assertEqual(self.link_cmd.alias, 'openvswitch')
-
-    def test_state_property(self):
-        self.parent._execute = mock.Mock(return_value=LINK_SAMPLE[1])
-        self.assertEqual(self.link_cmd.state, 'UP')
-
-    def test_settings_property(self):
-        expected = {'mtu': 1500,
-                    'qlen': 1000,
-                    'state': 'UP',
-                    'qdisc': 'mq',
-                    'brd': 'ff:ff:ff:ff:ff:ff',
-                    'link/ether': 'cc:dd:ee:ff:ab:cd',
-                    'alias': 'openvswitch'}
-        self.parent._execute = mock.Mock(return_value=LINK_SAMPLE[1])
-        self.assertEqual(self.link_cmd.attributes, expected)
-        self._assert_call(['o'], ('show', 'eth0'))
+    @mock.patch.object(priv_lib, 'get_link_attributes')
+    def test_settings_property(self, get_link_attributes):
+        self.link_cmd.attributes
+        get_link_attributes.assert_called_once_with(
+            self.parent.name, self.parent.namespace)
 
 
 class TestIpAddrCommand(TestIPCmdBase):
@@ -842,60 +813,94 @@ class TestIpAddrCommand(TestIPCmdBase):
         self.command = 'addr'
         self.addr_cmd = ip_lib.IpAddrCommand(self.parent)
 
-    def test_add_address(self):
+    @mock.patch.object(priv_lib, 'add_ip_address')
+    def test_add_address(self, add):
         self.addr_cmd.add('192.168.45.100/24')
-        self._assert_sudo([4],
-                          ('add', '192.168.45.100/24',
-                           'scope', 'global',
-                           'dev', 'tap0',
-                           'brd', '192.168.45.255'))
+        add.assert_called_once_with(
+            4,
+            '192.168.45.100',
+            24,
+            self.parent.name,
+            self.addr_cmd._parent.namespace,
+            'global',
+            '192.168.45.255')
 
-    def test_add_address_scoped(self):
+    @mock.patch.object(priv_lib, 'add_ip_address')
+    def test_add_address_scoped(self, add):
         self.addr_cmd.add('192.168.45.100/24', scope='link')
-        self._assert_sudo([4],
-                          ('add', '192.168.45.100/24',
-                           'scope', 'link',
-                           'dev', 'tap0',
-                           'brd', '192.168.45.255'))
+        add.assert_called_once_with(
+            4,
+            '192.168.45.100',
+            24,
+            self.parent.name,
+            self.addr_cmd._parent.namespace,
+            'link',
+            '192.168.45.255')
 
-    def test_add_address_no_broadcast(self):
+    @mock.patch.object(priv_lib, 'add_ip_address')
+    def test_add_address_no_broadcast(self, add):
         self.addr_cmd.add('192.168.45.100/24', add_broadcast=False)
-        self._assert_sudo([4],
-                          ('add', '192.168.45.100/24',
-                           'scope', 'global',
-                           'dev', 'tap0'))
+        add.assert_called_once_with(
+            4,
+            '192.168.45.100',
+            24,
+            self.parent.name,
+            self.addr_cmd._parent.namespace,
+            'global',
+            None)
 
-    def test_del_address(self):
+    @mock.patch.object(priv_lib, 'delete_ip_address')
+    def test_del_address(self, delete):
         self.addr_cmd.delete('192.168.45.100/24')
-        self._assert_sudo([4],
-                          ('del', '192.168.45.100/24', 'dev', 'tap0'))
+        delete.assert_called_once_with(
+            4,
+            '192.168.45.100',
+            24,
+            self.parent.name,
+            self.addr_cmd._parent.namespace)
 
-    def test_flush(self):
+    @mock.patch.object(priv_lib, 'flush_ip_addresses')
+    def test_flush(self, flush):
         self.addr_cmd.flush(6)
-        self._assert_sudo([6], ('flush', 'tap0'))
+        flush.assert_called_once_with(
+            6, self.parent.name, self.addr_cmd._parent.namespace)
 
     def test_list(self):
-        expected = [
+        expected_brd = [
+            dict(name='eth0', scope='global', tentative=False, dadfailed=False,
+                 dynamic=False, cidr='172.16.77.240/24',
+                 broadcast='172.16.77.255')]
+        expected_no_brd = [
+            dict(name='eth0', scope='global', tentative=False, dadfailed=False,
+                 dynamic=False, cidr='172.16.77.240/24', broadcast=None)]
+        expected_ipv6 = [
             dict(name='eth0', scope='global', dadfailed=False, tentative=False,
-                 dynamic=False, cidr='172.16.77.240/24'),
-            dict(name='eth0', scope='global', dadfailed=False, tentative=False,
-                 dynamic=True, cidr='2001:470:9:1224:5595:dd51:6ba2:e788/64'),
+                 dynamic=True, cidr='2001:470:9:1224:5595:dd51:6ba2:e788/64',
+                 broadcast=None),
             dict(name='eth0', scope='link', dadfailed=False, tentative=True,
-                 dynamic=False, cidr='fe80::3023:39ff:febc:22ae/64'),
+                 dynamic=False, cidr='fe80::3023:39ff:febc:22ae/64',
+                 broadcast=None),
             dict(name='eth0', scope='link', dadfailed=True, tentative=True,
-                 dynamic=False, cidr='fe80::3023:39ff:febc:22af/64'),
+                 dynamic=False, cidr='fe80::3023:39ff:febc:22af/64',
+                 broadcast=None),
             dict(name='eth0', scope='global', dadfailed=False, tentative=False,
-                 dynamic=True, cidr='2001:470:9:1224:fd91:272:581e:3a32/64'),
+                 dynamic=True, cidr='2001:470:9:1224:fd91:272:581e:3a32/64',
+                 broadcast=None),
             dict(name='eth0', scope='global', dadfailed=False, tentative=False,
-                 dynamic=True, cidr='2001:470:9:1224:4508:b885:5fb:740b/64'),
+                 dynamic=True, cidr='2001:470:9:1224:4508:b885:5fb:740b/64',
+                 broadcast=None),
             dict(name='eth0', scope='global', dadfailed=False, tentative=False,
-                 dynamic=True, cidr='2001:470:9:1224:dfcc:aaff:feb9:76ce/64'),
+                 dynamic=True, cidr='2001:470:9:1224:dfcc:aaff:feb9:76ce/64',
+                 broadcast=None),
             dict(name='eth0', scope='link', dadfailed=False, tentative=False,
-                 dynamic=False, cidr='fe80::dfcc:aaff:feb9:76ce/64')]
+                 dynamic=False, cidr='fe80::dfcc:aaff:feb9:76ce/64',
+                 broadcast=None)]
 
-        test_cases = [ADDR_SAMPLE, ADDR_SAMPLE2]
+        cases = [
+            (ADDR_SAMPLE, expected_brd + expected_ipv6),
+            (ADDR_SAMPLE2, expected_no_brd + expected_ipv6)]
 
-        for test_case in test_cases:
+        for test_case, expected in cases:
             self.parent._run = mock.Mock(return_value=test_case)
             self.assertEqual(expected, self.addr_cmd.list())
             self._assert_call([], ('show', 'tap0'))
@@ -921,17 +926,24 @@ class TestIpAddrCommand(TestIPCmdBase):
                                                    wait_time=1)
 
     def test_list_filtered(self):
-        expected = [
+        expected_brd = [
             dict(name='eth0', scope='global', tentative=False, dadfailed=False,
-                 dynamic=False, cidr='172.16.77.240/24')]
+                 dynamic=False, cidr='172.16.77.240/24',
+                 broadcast='172.16.77.255')]
+        expected_no_brd = [
+            dict(name='eth0', scope='global', tentative=False, dadfailed=False,
+                 dynamic=False, cidr='172.16.77.240/24', broadcast=None)]
 
-        test_cases = [ADDR_SAMPLE, ADDR_SAMPLE2]
+        cases = [
+            (ADDR_SAMPLE, expected_brd), (ADDR_SAMPLE2, expected_no_brd)]
 
-        for test_case in test_cases:
+        for test_case, expected in cases:
             output = '\n'.join(test_case.split('\n')[0:4])
             self.parent._run.return_value = output
-            self.assertEqual(self.addr_cmd.list('global',
-                             filters=['permanent']), expected)
+            self.assertEqual(
+                expected,
+                self.addr_cmd.list(
+                    'global', filters=['permanent']))
             self._assert_call([], ('show', 'tap0', 'permanent', 'scope',
                               'global'))
 
@@ -944,6 +956,7 @@ class TestIpAddrCommand(TestIPCmdBase):
         devices = self.addr_cmd.get_devices_with_ip(to='172.16.77.240/24')
         self.assertEqual(1, len(devices))
         expected = {'cidr': '172.16.77.240/24',
+                    'broadcast': '172.16.77.255',
                     'dadfailed': False,
                     'dynamic': False,
                     'name': 'eth0',
@@ -1311,28 +1324,6 @@ class TestIpNetnsCommand(TestIPCmdBase):
 
 
 class TestDeviceExists(base.BaseTestCase):
-    def test_device_exists(self):
-        with mock.patch('neutron.agent.common.utils.execute') as execute:
-            execute.return_value = LINK_SAMPLE[1]
-            self.assertTrue(ip_lib.device_exists('eth0'))
-            execute.assert_called_once_with(
-                ['ip', '-o', 'link', 'show', 'eth0'],
-                run_as_root=False, log_fail_as_error=False)
-
-    def test_device_exists_reset_fail(self):
-        device = ip_lib.IPDevice('eth0')
-        device.set_log_fail_as_error(True)
-        with mock.patch.object(ip_lib.IPDevice, '_execute') as _execute:
-            _execute.return_value = LINK_SAMPLE[1]
-            self.assertTrue(device.exists())
-            self.assertTrue(device.get_log_fail_as_error())
-
-    def test_device_does_not_exist(self):
-        with mock.patch.object(ip_lib.IPDevice, '_execute') as _execute:
-            _execute.return_value = ''
-            _execute.side_effect = RuntimeError
-            self.assertFalse(ip_lib.device_exists('eth0'))
-
     def test_ensure_device_is_ready(self):
         ip_lib_mock = mock.Mock()
         with mock.patch.object(ip_lib, 'IPDevice', return_value=ip_lib_mock):
@@ -1344,10 +1335,15 @@ class TestDeviceExists(base.BaseTestCase):
             self.assertFalse(ip_lib.ensure_device_is_ready("eth0"))
 
     def test_ensure_device_is_ready_no_link_address(self):
-        with mock.patch.object(ip_lib.IPDevice, '_execute') as _execute:
-            # Use lo, it has no MAC address
-            _execute.return_value = LINK_SAMPLE[0]
+        with mock.patch.object(
+            priv_lib, 'get_link_attributes'
+        ) as get_link_attributes, mock.patch.object(
+            priv_lib, 'set_link_attribute'
+        ) as set_link_attribute:
+            get_link_attributes.return_value = {}
             self.assertFalse(ip_lib.ensure_device_is_ready("lo"))
+            get_link_attributes.assert_called_once_with("lo", None)
+            set_link_attribute.assert_not_called()
 
 
 class TestGetRoutingTable(base.BaseTestCase):
@@ -1640,6 +1636,23 @@ class TestIpNeighCommand(TestIPCmdBase):
             state=ndmsg.states['permanent'])
 
     @mock.patch.object(pyroute2, 'NetNS')
+    def test_add_entry_with_state_override(self, mock_netns):
+        mock_netns_instance = mock_netns.return_value
+        mock_netns_enter = mock_netns_instance.__enter__.return_value
+        mock_netns_enter.link_lookup.return_value = [1]
+        self.neigh_cmd.add(
+            '192.168.45.100', 'cc:dd:ee:ff:ab:cd', nud_state='reachable')
+        mock_netns_enter.link_lookup.assert_called_once_with(ifname='tap0')
+        mock_netns_enter.neigh.assert_called_once_with(
+            'replace',
+            dst='192.168.45.100',
+            lladdr='cc:dd:ee:ff:ab:cd',
+            family=2,
+            ifindex=1,
+            state=ndmsg.states['reachable'],
+            nud_state='reachable')
+
+    @mock.patch.object(pyroute2, 'NetNS')
     def test_add_entry_nonexistent_namespace(self, mock_netns):
         mock_netns.side_effect = OSError(errno.ENOENT, None)
         with testtools.ExpectedException(ip_lib.NetworkNamespaceNotFound):
@@ -1666,7 +1679,7 @@ class TestIpNeighCommand(TestIPCmdBase):
             family=2,
             ifindex=1)
 
-    @mock.patch.object(priv_lib, '_run_iproute')
+    @mock.patch.object(priv_lib, '_run_iproute_neigh')
     def test_delete_entry_not_exist(self, mock_run_iproute):
         # trying to delete a non-existent entry shouldn't raise an error
         mock_run_iproute.side_effect = NetlinkError(errno.ENOENT, None)

@@ -1,5 +1,4 @@
 - project:
-    name: openstack/neutron
     templates:
       - neutron-tempest-plugin-jobs
     check:
@@ -15,14 +14,22 @@
         - neutron-tempest-dvr-ha-multinode-full
         - neutron-tempest-ovsfw
         - neutron-grenade
+        - openstack-tox-lower-constraints
     gate:
       jobs:
         - neutron-functional
+        - neutron-fullstack
         - neutron-tempest-dvr
         - neutron-tempest-linuxbridge
         - neutron-grenade-multinode
         - neutron-grenade-dvr-multinode
         - neutron-grenade
+        - openstack-tox-lower-constraints
+    periodic:
+      jobs:
+        - neutron-functional
+        - neutron-tempest-postgres-full
+        - neutron-tempest-with-ryu-master
 
 - job:
     name: neutron-functional
@@ -53,7 +60,6 @@
       - ^doc/.*$
       - ^neutron/locale/.*$
       - ^releasenotes/.*$
-    voting: false
 
 - job:
     name: neutron-rally-neutron
@@ -246,7 +252,6 @@
       - ^setup.cfg$
       - ^tools/.*$
       - ^tox.ini$
-    voting: false
 
 - job:
     name: neutron-grenade
@@ -268,3 +273,25 @@
       - ^setup.cfg$
       - ^tools/.*$
       - ^tox.ini$
+
+- job:
+    name: neutron-tempest-postgres-full
+    parent: legacy-dsvm-base
+    run: playbooks/legacy/neutron-tempest-postgres-full/run.yaml
+    post-run: playbooks/legacy/neutron-tempest-postgres-full/post.yaml
+    timeout: 7800
+    required-projects:
+      - openstack-infra/devstack-gate
+      - openstack/neutron
+      - openstack/tempest
+
+- job:
+    name: neutron-tempest-with-ryu-master
+    parent: legacy-dsvm-base
+    run: playbooks/legacy/neutron-tempest-with-ryu-master/run.yaml
+    post-run: playbooks/legacy/neutron-tempest-with-ryu-master/post.yaml
+    timeout: 7800
+    required-projects:
+      - openstack-infra/devstack-gate
+      - openstack/neutron
+      - openstack/tempest

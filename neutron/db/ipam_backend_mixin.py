@@ -692,7 +692,8 @@ class IpamBackendMixin(db_base_plugin_common.DbBasePluginCommon):
             # subnets. Happens on routed networks when host isn't known.
             raise ipam_exceptions.DeferIpam()
 
-        raise ipam_exceptions.IpAddressGenerationFailureNoMatchingSubnet()
+        raise ipam_exceptions.IpAddressGenerationFailureNoMatchingSubnet(
+            network_id=network_id, service_type=service_type)
 
     def _find_candidate_subnets(self, context, network_id, host, service_type,
                                 fixed_configured):
@@ -764,16 +765,17 @@ class IpamBackendMixin(db_base_plugin_common.DbBasePluginCommon):
         old_ips = old_port.get('fixed_ips')
         deferred_ip_allocation = (
             old_port.get('ip_allocation') ==
-            ipalloc_apidef.IP_ALLOCATION_DEFERRED
-            and host and not old_host
-            and not old_ips
-            and not fixed_ips_requested)
+            ipalloc_apidef.IP_ALLOCATION_DEFERRED and
+            host and not old_host and
+            not old_ips and
+            not fixed_ips_requested)
         if not deferred_ip_allocation:
             # Check that any existing IPs are valid on the new segment
             new_host_requested = host and host != old_host
             if old_ips and new_host_requested and not fixed_ips_requested:
                 valid_subnets = self._ipam_get_subnets(
-                    context, old_port['network_id'], host)
+                    context, old_port['network_id'], host,
+                    service_type=old_port.get('device_owner'))
                 valid_subnet_ids = {s['id'] for s in valid_subnets}
                 for fixed_ip in old_ips:
                     if fixed_ip['subnet_id'] not in valid_subnet_ids:
