@@ -142,7 +142,7 @@ class DvrLocalRouter(dvr_router_base.DvrRouterBase):
 
     def _add_floating_ip_rule(self, floating_ip, fixed_ip):
         rule_pr = self.fip_ns.allocate_rule_priority(floating_ip)
-        self.floating_ips_dict[floating_ip] = rule_pr
+        self.floating_ips_dict[floating_ip] = (fixed_ip, rule_pr)
         ip_rule = ip_lib.IPRule(namespace=self.ns_name)
         ip_rule.rule.add(ip=fixed_ip,
                          table=dvr_fip_ns.FIP_RT_TBL,
@@ -150,9 +150,9 @@ class DvrLocalRouter(dvr_router_base.DvrRouterBase):
 
     def _remove_floating_ip_rule(self, floating_ip):
         if floating_ip in self.floating_ips_dict:
-            rule_pr = self.floating_ips_dict[floating_ip]
+            fixed_ip, rule_pr = self.floating_ips_dict[floating_ip]
             ip_rule = ip_lib.IPRule(namespace=self.ns_name)
-            ip_rule.rule.delete(ip=floating_ip,
+            ip_rule.rule.delete(ip=fixed_ip,
                                 table=dvr_fip_ns.FIP_RT_TBL,
                                 priority=rule_pr)
             self.fip_ns.deallocate_rule_priority(floating_ip)
@@ -239,7 +239,8 @@ class DvrLocalRouter(dvr_router_base.DvrRouterBase):
                 arp_delete.add(arp_entry)
         self._pending_arp_set -= arp_delete
 
-    def _update_arp_entry(self, ip, mac, subnet_id, operation):
+    def _update_arp_entry(
+        self, ip, mac, subnet_id, operation, nud_state='permanent'):
         """Add or delete arp entry into router namespace for the subnet."""
         port = self._get_internal_port(subnet_id)
         # update arp entry only if the subnet is attached to the router
@@ -252,7 +253,7 @@ class DvrLocalRouter(dvr_router_base.DvrRouterBase):
             device = ip_lib.IPDevice(interface_name, namespace=self.ns_name)
             if device.exists():
                 if operation == 'add':
-                    device.neigh.add(ip, mac)
+                    device.neigh.add(ip, mac, nud_state=nud_state)
                 elif operation == 'delete':
                     device.neigh.delete(ip, mac)
                 return True
@@ -276,12 +277,14 @@ class DvrLocalRouter(dvr_router_base.DvrRouterBase):
         subnet_ports = self.agent.get_ports_by_subnet(subnet_id)
 
         for p in subnet_ports:
+            nud_state = 'permanent' if p.get('device_owner') else 'reachable'
             if p['device_owner'] not in lib_constants.ROUTER_INTERFACE_OWNERS:
                 for fixed_ip in p['fixed_ips']:
                     self._update_arp_entry(fixed_ip['ip_address'],
                                            p['mac_address'],
                                            subnet_id,
-                                           'add')
+                                           'add',
+                                           nud_state=nud_state)
         self._process_arp_cache_for_internal_port(subnet_id)
 
     @staticmethod
@@ -574,7 +577,17 @@ class DvrLocalRouter(dvr_router_base.DvrRouterBase):
                 self.connect_rtr_2_fip()
         super(DvrLocalRouter, self).process_external()
 
+    def _check_rtr_2_fip_connect(self):
+        """Checks if the rtr to fip connect exists, if not sets to false."""
+        fip_ns_name = self.fip_ns.get_name()
+        ip_wrapper = ip_lib.IPWrapper(namespace=fip_ns_name)
+        if ip_wrapper.netns.exists(fip_ns_name):
+            fip_2_rtr_name = self.fip_ns.get_int_device_name(self.router_id)
+            if not ip_lib.device_exists(fip_2_rtr_name, namespace=fip_ns_name):
+                self.rtr_fip_connect = False
+
     def connect_rtr_2_fip(self):
+        self._check_rtr_2_fip_connect()
         if self.fip_ns.agent_gateway_port and not self.rtr_fip_connect:
             ex_gw_port = self.get_ex_gw_port()
             self.fip_ns.create_rtr_2_fip_link(self)

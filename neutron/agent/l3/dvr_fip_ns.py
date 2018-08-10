@@ -166,7 +166,15 @@ class FipNamespace(namespaces.Namespace):
                          namespace=ns_name,
                          prefix=FIP_EXT_DEV_PREFIX,
                          mtu=ex_gw_port.get('mtu'))
-
+        if self.agent_conf.external_network_bridge:
+            # NOTE(Swami): for OVS implementations remove the DEAD VLAN tag
+            # on ports. DEAD VLAN tag is added to each newly created port
+            # and should be removed by L2 agent but if
+            # external_network_bridge is set than external gateway port is
+            # created in this bridge and will not be touched by L2 agent.
+            # This is related to lp#1767422
+            self.driver.remove_vlan_tag(
+                self.agent_conf.external_network_bridge, interface_name)
         # Remove stale fg devices
         ip_wrapper = ip_lib.IPWrapper(namespace=ns_name)
         devices = ip_wrapper.get_devices()
@@ -393,9 +401,12 @@ class FipNamespace(namespaces.Namespace):
                     fg_device.route.flush(lib_constants.IP_VERSION_6,
                                           table=tbl_index)
                     # Remove the rule lookup
-                    # IP is ignored in delete, but we still require it
-                    # for getting the ip_version.
-                    fip_rt_rule.rule.delete(ip=fip_2_rtr.ip,
+                    # /0 addresses for IPv4 and IPv6 are used to pass
+                    # IP protocol version information based on a
+                    # link-local address IP version. Using any of those
+                    # is equivalent to using 'from all' for iproute2.
+                    rule_ip = lib_constants.IP_ANY[fip_2_rtr.ip.version]
+                    fip_rt_rule.rule.delete(ip=rule_ip,
                                             iif=fip_2_rtr_name,
                                             table=tbl_index,
                                             priority=tbl_index)

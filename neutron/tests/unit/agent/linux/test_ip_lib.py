@@ -689,7 +689,7 @@ class TestIpRuleCommand(TestIPCmdBase):
         ip_version = netaddr.IPNetwork(ip).version
         self.rule_cmd.delete(ip, table=table, priority=priority)
         self._assert_sudo([ip_version],
-                          ('del', 'priority', str(priority),
+                          ('del', 'from', ip, 'priority', str(priority),
                            'table', str(table), 'type', 'unicast'))
 
     def test__parse_line(self):
@@ -1642,6 +1642,23 @@ class TestIpNeighCommand(TestIPCmdBase):
             family=2,
             ifindex=1,
             state=ndmsg.states['permanent'])
+
+    @mock.patch.object(pyroute2, 'NetNS')
+    def test_add_entry_with_state_override(self, mock_netns):
+        mock_netns_instance = mock_netns.return_value
+        mock_netns_enter = mock_netns_instance.__enter__.return_value
+        mock_netns_enter.link_lookup.return_value = [1]
+        self.neigh_cmd.add(
+            '192.168.45.100', 'cc:dd:ee:ff:ab:cd', nud_state='reachable')
+        mock_netns_enter.link_lookup.assert_called_once_with(ifname='tap0')
+        mock_netns_enter.neigh.assert_called_once_with(
+            'replace',
+            dst='192.168.45.100',
+            lladdr='cc:dd:ee:ff:ab:cd',
+            family=2,
+            ifindex=1,
+            state=ndmsg.states['reachable'],
+            nud_state='reachable')
 
     @mock.patch.object(pyroute2, 'NetNS')
     def test_add_entry_nonexistent_namespace(self, mock_netns):

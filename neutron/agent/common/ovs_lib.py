@@ -239,6 +239,8 @@ class OVSBridge(BaseOVS):
                           'protocols', *protocols).execute(check_error=True)
 
     def create(self, secure_mode=False):
+        other_config = {
+            'mac-table-size': str(cfg.CONF.bridge_mac_table_size)}
         with self.ovsdb.transaction() as txn:
             txn.add(
                 self.ovsdb.add_br(self.br_name,
@@ -250,6 +252,9 @@ class OVSBridge(BaseOVS):
             txn.add(
                 self.ovsdb.db_add('Bridge', self.br_name,
                                   'protocols', constants.OPENFLOW10))
+            txn.add(
+                self.ovsdb.db_set('Bridge', self.br_name,
+                                  ('other_config', other_config)))
             if secure_mode:
                 txn.add(self.ovsdb.set_fail_mode(self.br_name,
                                                  FAILMODE_SECURE))
@@ -275,6 +280,19 @@ class OVSBridge(BaseOVS):
         with self.ovsdb.transaction() as txn:
             txn.add(self.ovsdb.add_port(self.br_name, port_name,
                                         may_exist=False))
+            # NOTE(mangelajo): Port is added to dead vlan (4095) by default
+            # until it's handled by the neutron-openvswitch-agent. Otherwise it
+            # becomes a trunk port on br-int (receiving traffic for all vlans),
+            # and also triggers issues on ovs-vswitchd related to the
+            # datapath flow revalidator thread, see lp#1767422
+            txn.add(self.ovsdb.db_set(
+                    'Port', port_name, ('tag', constants.DEAD_VLAN_TAG)))
+
+            # TODO(mangelajo): We could accept attr tuples for the Port too
+            # but, that could potentially break usage of this function in
+            # stable branches (where we need to backport).
+            # https://review.openstack.org/#/c/564825/4/neutron/agent/common/
+            # ovs_lib.py@289
             if interface_attr_tuples:
                 txn.add(self.ovsdb.db_set('Interface', port_name,
                                           *interface_attr_tuples))
@@ -447,7 +465,7 @@ class OVSBridge(BaseOVS):
             vxlan_udp_port != p_const.VXLAN_UDP_PORT
         )
         if vxlan_uses_custom_udp_port:
-            options['dst_port'] = vxlan_udp_port
+            options['dst_port'] = str(vxlan_udp_port)
         options['df_default'] = str(dont_fragment).lower()
         options['remote_ip'] = remote_ip
         options['local_ip'] = local_ip

@@ -473,7 +473,7 @@ class IpRuleCommand(IpCommandBase):
     def add(self, ip, **kwargs):
         ip_version = common_utils.get_ip_version(ip)
 
-        # In case if we need to add in a rule based on incoming
+        # In case we need to add a rule based on an incoming
         # interface, pass the "any" IP address, for example, 0.0.0.0/0,
         # else pass the given IP.
         if kwargs.get('iif'):
@@ -489,8 +489,13 @@ class IpRuleCommand(IpCommandBase):
     def delete(self, ip, **kwargs):
         ip_version = common_utils.get_ip_version(ip)
 
-        # TODO(Carl) ip ignored in delete, okay in general?
-
+        # In case we need to delete a rule based on an incoming
+        # interface, pass the "any" IP address, for example, 0.0.0.0/0,
+        # else pass the given IP.
+        if kwargs.get('iif'):
+            kwargs.update({'from': constants.IP_ANY[ip_version]})
+        else:
+            kwargs.update({'from': ip})
         canonical_kwargs = self._make_canonical(ip_version, kwargs)
 
         args_tuple = self._make__flat_args_tuple('del', **canonical_kwargs)
@@ -1218,3 +1223,10 @@ def set_ip_nonlocal_bind_for_namespace(namespace):
             "different network node, and the peer side getting a "
             "populated ARP cache for a given floating IP address.",
             IP_NONLOCAL_BIND)
+
+
+def get_ipv6_forwarding(device, namespace=None):
+    """Get kernel value of IPv6 forwarding for device in given namespace."""
+    cmd = ['sysctl', '-b', "net.ipv6.conf.%s.forwarding" % device]
+    ip_wrapper = IPWrapper(namespace)
+    return int(ip_wrapper.netns.execute(cmd, run_as_root=True))

@@ -208,6 +208,22 @@ class TestLegacyL3Agent(TestL3Agent):
         # Verify north-south connectivity using ping6 to external_vm.
         vm.block_until_ping(external_vm.ipv6)
 
+        # Now let's remove and create again phys bridge and check connectivity
+        # once again
+        br_phys = self.environment.hosts[0].br_phys
+        br_phys.destroy()
+        br_phys.create()
+        self.environment.hosts[0].connect_to_internal_network_via_vlans(
+            br_phys)
+
+        # ping floating ip from external vm
+        external_vm.block_until_ping(fip['floating_ip_address'])
+
+        # Verify VM is able to reach the router interface.
+        vm.block_until_ping(vm.gateway_ipv6)
+        # Verify north-south connectivity using ping6 to external_vm.
+        vm.block_until_ping(external_vm.ipv6)
+
 
 class TestHAL3Agent(TestL3Agent):
 
@@ -257,6 +273,19 @@ class TestHAL3Agent(TestL3Agent):
             if self._get_keepalived_state(keepalived_state_file) == "master":
                 return keepalived_state_file
 
+    def _get_l3_agents_with_ha_state(self, l3_agents, router_id, ha_state):
+        found_agents = []
+        agents_hosting_router = self.client.list_l3_agent_hosting_routers(
+            router_id)['agents']
+        for agent in l3_agents:
+            agent_host = agent.neutron_cfg_fixture.get_host()
+            for agent_hosting_router in agents_hosting_router:
+                if (agent_hosting_router['host'] == agent_host and
+                        agent_hosting_router['ha_state'] == ha_state):
+                    found_agents.append(agent)
+                    break
+        return found_agents
+
     def test_keepalived_multiple_sighups_does_not_forfeit_mastership(self):
         """Setup a complete "Neutron stack" - both an internal and an external
            network+subnet, and a router connected to both.
@@ -305,3 +334,35 @@ class TestHAL3Agent(TestL3Agent):
             self.assertEqual(
                 "master",
                 self._get_keepalived_state(keepalived_state_file))
+
+    def test_ha_router_restart_standby_agents_no_packet_lost(self):
+        tenant_id = uuidutils.generate_uuid()
+        ext_net, ext_sub = self._create_external_network_and_subnet(tenant_id)
+        router = self.safe_client.create_router(tenant_id, ha=True,
+                                                external_network=ext_net['id'])
+
+        external_vm = self.useFixture(
+            machine_fixtures.FakeMachine(
+                self.environment.central_external_bridge,
+                common_utils.ip_to_cidr(ext_sub['gateway_ip'], 24)))
+
+        common_utils.wait_until_true(
+            lambda:
+            len(self.client.list_l3_agent_hosting_routers(
+                router['id'])['agents']) == 2,
+            timeout=90)
+
+        common_utils.wait_until_true(
+            functools.partial(
+                self._is_ha_router_active_on_one_agent,
+                router['id']),
+            timeout=90)
+
+        router_ip = router['external_gateway_info'][
+            'external_fixed_ips'][0]['ip_address']
+        l3_agents = [host.agents['l3'] for host in self.environment.hosts]
+        l3_standby_agents = self._get_l3_agents_with_ha_state(
+            l3_agents, router['id'], 'standby')
+
+        self._assert_ping_during_agents_restart(
+            l3_standby_agents, external_vm.namespace, [router_ip], count=60)

@@ -18,11 +18,15 @@ import uuid
 
 import mock
 from neutron_lib import constants as const
+from oslo_config import cfg
+import six
 
 from neutron.agent.common import ovs_lib
 from neutron.agent.linux import ip_lib
 from neutron.agent.ovsdb.native import idlutils
 from neutron.common import utils
+from neutron.plugins.ml2.drivers.openvswitch.agent.common import (
+    constants as agent_const)
 from neutron.tests.common.exclusive_resources import port
 from neutron.tests.common import net_helpers
 from neutron.tests.functional.agent.linux import base
@@ -88,6 +92,8 @@ class OVSBridgeTestCase(OVSBridgeTestBase):
         self.assertTrue(self.br.port_exists(port_name))
         self.assertEqual('test', self.br.db_get_val('Interface', port_name,
                                                     'external_ids')['test'])
+        self.assertEqual(agent_const.DEAD_VLAN_TAG,
+                         self.br.db_get_val('Port', port_name, 'tag'))
 
     def test_attribute_lifecycle(self):
         (port_name, ofport) = self.create_ovs_port()
@@ -217,6 +223,17 @@ class OVSBridgeTestCase(OVSBridgeTestBase):
             'local_ip': '2001:db8:100::1',
         }
         self._test_add_tunnel_port(attrs)
+
+    def test_add_tunnel_port_custom_port(self):
+        port_name = utils.get_rand_device_name(net_helpers.PORT_PREFIX)
+        self.br.add_tunnel_port(
+            port_name,
+            self.get_test_net_address(1),
+            self.get_test_net_address(2),
+            tunnel_type=const.TYPE_VXLAN,
+            vxlan_udp_port=12345)
+        options = self.ovs.db_get_val('Interface', port_name, 'options')
+        self.assertEqual("12345", options['dst_port'])
 
     def test_add_patch_port(self):
         local = utils.get_rand_device_name(net_helpers.PORT_PREFIX)
@@ -557,7 +574,9 @@ class OVSLibTestCase(base.BaseOVSLinuxTestCase):
         self.assertTrue(set(self.ovs.get_bridges()).issuperset(bridges))
 
     def test_bridge_lifecycle_ovsbridge(self):
-        name = utils.get_rand_name(prefix=net_helpers.BR_PREFIX)
+        name = six.text_type(utils.get_rand_name(prefix=net_helpers.BR_PREFIX))
+        mac_table_size = 12345
+        cfg.CONF.set_override('bridge_mac_table_size', mac_table_size)
         br = ovs_lib.OVSBridge(name)
         self.assertEqual(br.br_name, name)
         # Make sure that instantiating an OVSBridge does not actually create
@@ -565,6 +584,11 @@ class OVSLibTestCase(base.BaseOVSLinuxTestCase):
         self.addCleanup(self.ovs.delete_bridge, name)
         br.create()
         self.assertTrue(self.ovs.bridge_exists(name))
+        br_other_config = self.ovs.ovsdb.db_find(
+            'Bridge', ('name', '=', name), columns=['other_config']
+        ).execute()[0]['other_config']
+        self.assertEqual(str(mac_table_size),
+                         br_other_config['mac-table-size'])
         br.destroy()
         self.assertFalse(self.ovs.bridge_exists(name))
 

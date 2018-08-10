@@ -1,5 +1,4 @@
 - project:
-    name: openstack/neutron
     check:
       jobs:
         - neutron-functional
@@ -12,7 +11,6 @@
         - neutron-tempest-multinode-full
         - neutron-tempest-dvr-ha-multinode-full
         - neutron-tempest-ovsfw
-        - neutron-tempest-full
         - neutron-grenade
     gate:
       jobs:
@@ -21,7 +19,6 @@
         - neutron-tempest-linuxbridge
         - neutron-grenade-multinode
         - neutron-grenade-dvr-multinode
-        - neutron-tempest-full
         - neutron-grenade
 
 - job:
@@ -79,7 +76,7 @@
       - openstack/python-senlinclient
       - openstack/python-watcherclient
       - openstack/python-zaqarclient
-      - openstack/rally
+      - {"name": "openstack/rally", "override-checkout": "0.12.1"}
       - openstack/senlin
       - openstack/tripleo-image-elements
       - openstack/watcher
@@ -146,7 +143,7 @@
       - openstack-dev/grenade
       - openstack-infra/devstack-gate
       - openstack/neutron
-    nodeset: legacy-ubuntu-xenial-2-node
+    nodeset: ubuntu-xenial-2-node
     irrelevant-files:
       - ^(test-|)requirements.txt$
       - ^.*\.rst$
@@ -168,7 +165,7 @@
       - openstack-dev/grenade
       - openstack-infra/devstack-gate
       - openstack/neutron
-    nodeset: legacy-ubuntu-xenial-2-node
+    nodeset: ubuntu-xenial-2-node
     irrelevant-files:
       - ^(test-|)requirements.txt$
       - ^.*\.rst$
@@ -190,7 +187,7 @@
       - openstack-infra/devstack-gate
       - openstack/neutron
       - openstack/tempest
-    nodeset: legacy-ubuntu-xenial-2-node
+    nodeset: ubuntu-xenial-2-node
     irrelevant-files:
       - ^(test-|)requirements.txt$
       - ^.*\.rst$
@@ -213,7 +210,7 @@
       - openstack-infra/devstack-gate
       - openstack/neutron
       - openstack/tempest
-    nodeset: legacy-ubuntu-xenial-3-node
+    nodeset: ubuntu-xenial-3-node
     irrelevant-files:
       - ^(test-|)requirements.txt$
       - ^.*\.rst$
@@ -247,27 +244,6 @@
       - ^tools/.*$
       - ^tox.ini$
     voting: false
-
-- job:
-    name: neutron-tempest-full
-    parent: legacy-dsvm-base
-    run: playbooks/legacy/neutron-tempest-full/run.yaml
-    post-run: playbooks/legacy/neutron-tempest-full/post.yaml
-    timeout: 10800
-    required-projects:
-      - openstack-infra/devstack-gate
-      - openstack/neutron
-      - openstack/tempest
-    irrelevant-files:
-      - ^(test-|)requirements.txt$
-      - ^.*\.rst$
-      - ^doc/.*$
-      - ^neutron/locale/.*$
-      - ^neutron/tests/unit/.*$
-      - ^releasenotes/.*$
-      - ^setup.cfg$
-      - ^tools/.*$
-      - ^tox.ini$
 
 - job:
     name: neutron-grenade

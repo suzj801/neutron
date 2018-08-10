@@ -70,6 +70,7 @@ class NeutronConfigFixture(ConfigFixture):
                 'service_plugins': env_desc.service_plugins,
                 'auth_strategy': 'noauth',
                 'debug': 'True',
+                'global_physnet_mtu': env_desc.global_mtu,
                 'agent_down_time': str(env_desc.agent_down_time),
                 'transport_url':
                     'rabbit://%(user)s:%(password)s@%(host)s:5672/%(vhost)s' %
@@ -77,6 +78,7 @@ class NeutronConfigFixture(ConfigFixture):
                      'password': rabbitmq_environment.password,
                      'host': rabbitmq_environment.host,
                      'vhost': rabbitmq_environment.vhost},
+                'api_workers': 2,
             },
             'database': {
                 'connection': connection,
@@ -119,6 +121,9 @@ class NeutronConfigFixture(ConfigFixture):
 
     def _generate_policy_json(self):
         return c_helpers.find_sample_file('policy.json')
+
+    def get_host(self):
+        return self.config['DEFAULT']['host']
 
 
 class ML2ConfigFixture(ConfigFixture):

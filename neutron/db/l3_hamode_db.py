@@ -452,6 +452,20 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin,
             self._delete_vr_id_allocation(
                 context, ha_network, router_db.extra_attributes.ha_vr_id)
             router_db.extra_attributes.ha_vr_id = None
+        if router.get('distributed') or old_router['distributed']:
+            self.set_extra_attr_value(context, router_db,
+                                      'ha', requested_ha_state)
+            return
+        if requested_ha_state:
+            self._migrate_router_ports(
+                context, router_db,
+                old_owner=constants.DEVICE_OWNER_ROUTER_INTF,
+                new_owner=constants.DEVICE_OWNER_HA_REPLICATED_INT)
+        else:
+            self._migrate_router_ports(
+                context, router_db,
+                old_owner=constants.DEVICE_OWNER_HA_REPLICATED_INT,
+                new_owner=constants.DEVICE_OWNER_ROUTER_INTF)
         self.set_extra_attr_value(context, router_db, 'ha', requested_ha_state)
 
     @registry.receives(resources.ROUTER, [events.AFTER_UPDATE])
@@ -478,15 +492,6 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin,
             if ha_network:
                 self.safe_delete_ha_network(context, ha_network,
                                             router_db.tenant_id)
-            self._migrate_router_ports(
-                context, router_db,
-                old_owner=constants.DEVICE_OWNER_HA_REPLICATED_INT,
-                new_owner=constants.DEVICE_OWNER_ROUTER_INTF)
-        else:
-            self._migrate_router_ports(
-                context, router_db,
-                old_owner=constants.DEVICE_OWNER_ROUTER_INTF,
-                new_owner=constants.DEVICE_OWNER_HA_REPLICATED_INT)
 
         self.schedule_router(context, router_id)
         self._notify_router_updated(context, router_db.id)
@@ -703,10 +708,10 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin,
             if states[port['device_id']] == n_const.HA_ROUTER_STATE_ACTIVE)
 
         for port in active_ports:
-            port[portbindings.HOST_ID] = host
             try:
-                self._core_plugin.update_port(admin_ctx, port['id'],
-                                              {port_def.RESOURCE_NAME: port})
+                self._core_plugin.update_port(
+                    admin_ctx, port['id'],
+                    {port_def.RESOURCE_NAME: {portbindings.HOST_ID: host}})
             except (orm.exc.StaleDataError, orm.exc.ObjectDeletedError,
                     n_exc.PortNotFound):
                 # Take concurrently deleted interfaces in to account

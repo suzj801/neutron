@@ -24,7 +24,10 @@ import six
 import testtools
 
 from neutron.agent.l3 import agent as neutron_l3_agent
+from neutron.agent.l3 import dvr_edge_ha_router as dvr_ha_router
+from neutron.agent.l3 import dvr_edge_router
 from neutron.agent.l3 import dvr_fip_ns
+from neutron.agent.l3 import dvr_local_router
 from neutron.agent.l3 import dvr_snat_ns
 from neutron.agent.l3 import namespaces
 from neutron.agent.linux import ip_lib
@@ -111,6 +114,64 @@ class TestDvrRouter(framework.L3AgentTestFramework):
                 interface_rules_list_count = interface_rules_list_count + 1
         self.assertEqual(4, default_rules_list_count)
         self.assertEqual(2, interface_rules_list_count)
+
+    def test_dvr_update_gateway_port_no_fip_fg_port_recovers_itself_with_fpr(
+        self):
+        self.agent.conf.agent_mode = 'dvr'
+        # Create the router with external net
+        router_info = self.generate_dvr_router_info()
+        external_gw_port = router_info['gw_port']
+        ext_net_id = router_info['_floatingips'][0]['floating_network_id']
+        self.mock_plugin_api.get_external_network_id.return_value = ext_net_id
+        router = self.manage_router(self.agent, router_info)
+        fg_port = router.fip_ns.agent_gateway_port
+        fg_port_name = router.fip_ns.get_ext_device_name(fg_port['id'])
+        fg_device = ip_lib.IPDevice(fg_port_name,
+                                    namespace=router.fip_ns.name)
+        fip_2_rtr_name = router.fip_ns.get_int_device_name(router.router_id)
+        fpr_device = ip_lib.IPDevice(fip_2_rtr_name,
+                                     namespace=router.fip_ns.name)
+        # Now validate if the gateway is properly configured.
+        rtr_2_fip, fip_2_rtr = router.rtr_fip_subnet.get_pair()
+        tbl_index = router._get_snat_idx(fip_2_rtr)
+        tbl_filter = ['table', tbl_index]
+        self.assertIn('gateway', fg_device.route.get_gateway(
+            filters=tbl_filter))
+        self._validate_fips_for_external_network(
+            router, router.fip_ns.get_name())
+        # Now delete the fg- port that was created
+        ext_net_bridge = self.agent.conf.external_network_bridge
+        router.fip_ns.driver.unplug(fg_port_name,
+                                    bridge=ext_net_bridge,
+                                    namespace=router.fip_ns.name,
+                                    prefix=dvr_fip_ns.FIP_EXT_DEV_PREFIX)
+        # Now check if the fg- port is missing.
+        self.assertFalse(fg_device.exists())
+        fpr_device.link.set_down()
+        # Now change the gateway ip for the router and do an update.
+        router.ex_gw_port = copy.deepcopy(router.ex_gw_port)
+        new_fg_port = copy.deepcopy(fg_port)
+        for subnet in new_fg_port['subnets']:
+            subnet['gateway_ip'] = '19.4.4.2'
+        router.router[n_const.FLOATINGIP_AGENT_INTF_KEY] = [new_fg_port]
+        self.assertRaises(n_exc.FloatingIpSetupException,
+                          self.agent._process_updated_router,
+                          router.router)
+        self.agent._process_updated_router(router.router)
+        self.assertTrue(fg_device.exists())
+        self.assertTrue(fpr_device.exists())
+        updated_route = fg_device.route.list_routes(
+                ip_version=lib_constants.IP_VERSION_4,
+                table=tbl_index)
+        expected_route = [{'cidr': '0.0.0.0/0',
+                           'dev': fg_port_name,
+                           'table': tbl_index,
+                           u'via': u'19.4.4.2'}]
+        self.assertEqual(expected_route, updated_route)
+        self._validate_fips_for_external_network(
+            router, router.fip_ns.get_name())
+        self._delete_router(self.agent, router.router_id)
+        self._assert_fip_namespace_deleted(external_gw_port)
 
     def test_dvr_update_gateway_port_with_no_gw_port_in_namespace(self):
         self.agent.conf.agent_mode = 'dvr'
@@ -1124,11 +1185,11 @@ class TestDvrRouter(framework.L3AgentTestFramework):
         self.assertFalse(sg_device)
         self.assertTrue(qg_device)
 
-    def _mocked_dvr_ha_router(self, agent, enable_gw=True,
+    def _mocked_dvr_ha_router(self, agent, enable_ha=True, enable_gw=True,
                               enable_centralized_fip=False,
                               snat_bound_fip=False):
         r_info = self.generate_dvr_router_info(
-            enable_ha=True,
+            enable_ha=enable_ha,
             enable_snat=True,
             agent=agent,
             enable_gw=enable_gw,
@@ -1164,7 +1225,7 @@ class TestDvrRouter(framework.L3AgentTestFramework):
 
     def _create_dvr_ha_router(self, agent, enable_gw=True,
                               enable_centralized_fip=False,
-                              snat_bound_fip=False):
+                              snat_bound_fip=False, ha_interface=True):
         get_ns_name = mock.patch.object(namespaces.RouterNamespace,
                                         '_get_ns_name').start()
         get_snat_ns_name = mock.patch.object(dvr_snat_ns.SnatNamespace,
@@ -1172,7 +1233,11 @@ class TestDvrRouter(framework.L3AgentTestFramework):
         (r_info,
          mocked_r_ns_name,
          mocked_r_snat_ns_name) = self._mocked_dvr_ha_router(
-             agent, enable_gw, enable_centralized_fip, snat_bound_fip)
+             agent, ha_interface, enable_gw, enable_centralized_fip,
+             snat_bound_fip)
+
+        if not ha_interface:
+            r_info['ha'] = True
 
         get_ns_name.return_value = mocked_r_ns_name
         get_snat_ns_name.return_value = mocked_r_snat_ns_name
@@ -1272,6 +1337,40 @@ class TestDvrRouter(framework.L3AgentTestFramework):
         self._assert_no_ip_addresses_on_interface(namespace,
                                                   ex_gw_port_name)
 
+    @mock.patch.object(dvr_local_router.DvrLocalRouter, 'connect_rtr_2_fip')
+    @mock.patch.object(
+        dvr_ha_router.DvrEdgeHaRouter, '_get_centralized_fip_cidr_set')
+    def test_dvr_ha_router_with_centralized_fip_calls_keepalived_cidr(
+        self, connect_rtr_2_fip_mock, fip_cidr_centralized_mock):
+
+        self._setup_dvr_ha_agents()
+        self._setup_dvr_ha_bridges()
+
+        router1 = self._create_dvr_ha_router(
+            self.agent, enable_gw=True,
+            enable_centralized_fip=True,
+            snat_bound_fip=True)
+        self.assertTrue(fip_cidr_centralized_mock.called)
+        restarted_agent = neutron_l3_agent.L3NATAgentWithStateReport(
+            self.agent.host, self.agent.conf)
+        self.manage_router(restarted_agent, router1.router)
+        self.assertTrue(fip_cidr_centralized_mock.called)
+
+    @mock.patch.object(dvr_local_router.DvrLocalRouter, 'connect_rtr_2_fip')
+    @mock.patch.object(
+        dvr_edge_router.DvrEdgeRouter, '_get_centralized_fip_cidr_set')
+    def test_dvr_router_with_centralized_fip_calls_keepalived_cidr(
+        self, connect_rtr_2_fip_mock, fip_cidr_centralized_mock):
+
+        router_info = self.generate_dvr_router_info(
+            enable_gw=True, enable_centralized_fip=True, snat_bound_fip=True)
+        router1 = self.manage_router(self.agent, router_info)
+        self.assertTrue(fip_cidr_centralized_mock.called)
+        restarted_agent = neutron_l3_agent.L3NATAgentWithStateReport(
+            self.agent.host, self.agent.conf)
+        self.manage_router(restarted_agent, router1.router)
+        self.assertTrue(fip_cidr_centralized_mock.called)
+
     def _test_dvr_ha_router_failover_with_gw_and_fip(self, enable_gw,
                                                      enable_centralized_fip,
                                                      snat_bound_fip):
@@ -1329,6 +1428,26 @@ class TestDvrRouter(framework.L3AgentTestFramework):
 
     def test_dvr_ha_router_failover_without_gw(self):
         self._test_dvr_ha_router_failover(enable_gw=False)
+
+    def test_dvr_non_ha_router_update(self):
+        self._setup_dvr_ha_agents()
+        self._setup_dvr_ha_bridges()
+
+        router1 = self._create_dvr_ha_router(self.agent)
+        router2 = self._create_dvr_ha_router(self.failover_agent,
+                                             ha_interface=False)
+
+        r1_chsfr = mock.patch.object(self.agent,
+                                     'check_ha_state_for_router').start()
+        r2_chsfr = mock.patch.object(self.failover_agent,
+                                     'check_ha_state_for_router').start()
+
+        utils.wait_until_true(lambda: router1.ha_state == 'master')
+
+        self.agent._process_updated_router(router1.router)
+        self.assertTrue(r1_chsfr.called)
+        self.failover_agent._process_updated_router(router2.router)
+        self.assertFalse(r2_chsfr.called)
 
     def _setup_dvr_router_static_routes(
         self, router_namespace=True, check_fpr_int_rule_delete=False):

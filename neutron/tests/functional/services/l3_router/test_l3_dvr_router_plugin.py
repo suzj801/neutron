@@ -969,6 +969,16 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                         self.context, self.l3_agent['host'], [router['id']]))
                 floatingips = router_info[0][constants.FLOATINGIP_KEY]
                 self.assertTrue(floatingips[0][n_const.DVR_SNAT_BOUND])
+                # Test case to make sure when an agent in this case
+                # dvr_no_external restarts and does a full sync, we need
+                # to make sure that the returned router_info has
+                # DVR_SNAT_BOUND flag enabled, otherwise the floating IP
+                # state would error out.
+                router_sync_info = (
+                    self.l3_plugin.list_active_sync_routers_on_active_l3_agent(
+                        self.context, HOST1, [router['id']]))
+                floatingips = router_sync_info[0][constants.FLOATINGIP_KEY]
+                self.assertTrue(floatingips[0][n_const.DVR_SNAT_BOUND])
 
     def test_allowed_addr_pairs_delayed_fip_and_update_arp_entry(self):
         HOST1 = 'host1'
@@ -1035,7 +1045,8 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                 vm_arp_table = {
                     'ip_address': vm_port_fixed_ips[0]['ip_address'],
                     'mac_address': vm_port_mac,
-                    'subnet_id': vm_port_subnet_id}
+                    'subnet_id': vm_port_subnet_id,
+                    'nud_state': 'permanent'}
                 vm_port2 = self.core_plugin.update_port(
                     self.context, int_port2['port']['id'],
                     {'port': {portbindings.HOST_ID: HOST2}})
@@ -1087,7 +1098,8 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                 vrrp_arp_table1 = {
                     'ip_address': vrrp_port_fixed_ips[0]['ip_address'],
                     'mac_address': vm_port_mac,
-                    'subnet_id': vrrp_port_subnet_id}
+                    'subnet_id': vrrp_port_subnet_id,
+                    'nud_state': 'reachable'}
 
                 expected_calls = [
                         mock.call(self.context,
@@ -1202,7 +1214,8 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                 vm_arp_table = {
                     'ip_address': vm_port_fixed_ips[0]['ip_address'],
                     'mac_address': vm_port_mac,
-                    'subnet_id': vm_port_subnet_id}
+                    'subnet_id': vm_port_subnet_id,
+                    'nud_state': 'permanent'}
                 self.assertEqual(1, l3_notifier.add_arp_entry.call_count)
                 floating_ip = {'floating_network_id': ext_net['network']['id'],
                                'router_id': router['id'],
@@ -1231,7 +1244,8 @@ class L3DvrTestCase(L3DvrTestCaseBase):
                 vrrp_arp_table1 = {
                     'ip_address': vrrp_port_fixed_ips[0]['ip_address'],
                     'mac_address': vm_port_mac,
-                    'subnet_id': vrrp_port_subnet_id}
+                    'subnet_id': vrrp_port_subnet_id,
+                    'nud_state': 'reachable'}
 
                 expected_calls = [
                         mock.call(self.context,

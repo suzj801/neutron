@@ -67,6 +67,7 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
         # list of port which has security group
         self.filtered_ports = {}
         self.unfiltered_ports = {}
+        self.trusted_ports = []
         self.ipconntrack = ip_conntrack.get_conntrack(
             self.iptables.get_rules_for_table, self.filtered_ports,
             self.unfiltered_ports, namespace=namespace,
@@ -107,6 +108,37 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
                 self.updated_sg_members.update(device_ids)
             else:
                 self._update_remote_security_group_members(sec_group_ids)
+
+    def process_trusted_ports(self, port_ids):
+        """Process ports that are trusted and shouldn't be filtered."""
+        for port in port_ids:
+            if port not in self.trusted_ports:
+                self._add_trusted_port_rules(port)
+                self.trusted_ports.append(port)
+
+    def remove_trusted_ports(self, port_ids):
+        for port in port_ids:
+            if port in self.trusted_ports:
+                self._remove_trusted_port_rules(port)
+                self.trusted_ports.remove(port)
+
+    def _add_trusted_port_rules(self, port):
+        device = self._get_device_name(port)
+        jump_rule = [
+            '-m physdev --%s %s --physdev-is-bridged -j ACCEPT' % (
+                self.IPTABLES_DIRECTION[constants.INGRESS_DIRECTION],
+                device)]
+        self._add_rules_to_chain_v4v6(
+            'FORWARD', jump_rule, jump_rule, comment=ic.TRUSTED_ACCEPT)
+
+    def _remove_trusted_port_rules(self, port):
+        device = self._get_device_name(port)
+
+        jump_rule = [
+            '-m physdev --%s %s --physdev-is-bridged -j ACCEPT' % (
+                self.IPTABLES_DIRECTION[constants.INGRESS_DIRECTION],
+                device)]
+        self._remove_rule_from_chain_v4v6('FORWARD', jump_rule, jump_rule)
 
     def update_security_group_rules(self, sg_id, sg_rules):
         LOG.debug("Update rules of security group (%s)", sg_id)
@@ -266,6 +298,8 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
                                                   comment=comment)
 
     def _get_device_name(self, port):
+        if not isinstance(port, dict):
+            return port
         return port['device']
 
     def _update_port_sec_rules(self, port, direction, add=False):
@@ -652,6 +686,7 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
         if port_range_min is None:
             return args
 
+        protocol = n_const.IPTABLES_PROTOCOL_NAME_MAP.get(protocol, protocol)
         if protocol in ['icmp', 'ipv6-icmp']:
             protocol_type = 'icmpv6' if protocol == 'ipv6-icmp' else 'icmp'
             # Note(xuhanp): port_range_min/port_range_max represent
@@ -870,4 +905,6 @@ class OVSHybridIptablesFirewallDriver(IptablesFirewallDriver):
         return ('qvb' + port['device'])[:n_const.LINUX_DEV_LEN]
 
     def _get_device_name(self, port):
-        return get_hybrid_port_name(port['device'])
+        device_name = super(
+            OVSHybridIptablesFirewallDriver, self)._get_device_name(port)
+        return get_hybrid_port_name(device_name)
