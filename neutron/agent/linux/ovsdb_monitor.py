@@ -32,7 +32,6 @@ OVSDB_ACTION_INITIAL = 'initial'
 OVSDB_ACTION_INSERT = 'insert'
 OVSDB_ACTION_DELETE = 'delete'
 OVSDB_ACTION_NEW = 'new'
-OVSDB_ACTION_OLD = 'old'
 
 @contextlib.contextmanager
 def get_bridges_monitor(
@@ -122,7 +121,6 @@ class SimpleInterfaceMonitor(OvsdbMonitor):
         devices_added = []
         devices_removed = []
         dev_to_ofport = {}
-        dev_need_add_in_new = []
         for row in self.iter_stdout():
             json = jsonutils.loads(row).get('data')
             for ovs_id, action, name, ofport, external_ids in json:
@@ -133,16 +131,14 @@ class SimpleInterfaceMonitor(OvsdbMonitor):
                 device = {'name': name,
                           'ofport': ofport,
                           'external_ids': external_ids}
-                if action in (OVSDB_ACTION_INITIAL, OVSDB_ACTION_INSERT) and external_ids.get('iface-id'):
+                if action in (OVSDB_ACTION_INITIAL, OVSDB_ACTION_INSERT):
                     devices_added.append(device)
                 elif action == OVSDB_ACTION_DELETE:
                     devices_removed.append(device)
                 elif action == OVSDB_ACTION_NEW:
                     dev_to_ofport[name] = ofport
-                    if name in dev_need_add_in_new:
+                    if external_ids and external_ids.get('iface-id'):
                         devices_added.append(device)
-                elif action == OVSDB_ACTION_OLD and not external_ids.get('iface-id'):
-                    dev_need_add_in_new.append(name)
 
         self.new_events['added'].extend(devices_added)
         self.new_events['removed'].extend(devices_removed)
